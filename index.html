@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <meta name="theme-color" content="#0f172a" />
-  <title>Loxin Smart Queue System (v9 Per-Queue Multi-Language Sync + Thermal 58mm)</title>
+  <title>Loxin Smart Queue System (v10 Mobile Auto-Detect Language + Thermal 58mm)</title>
   <link rel="manifest" href="manifest.json" />
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
@@ -62,11 +62,11 @@
     <div style="font-size: 8px; margin-top: 8px;">.</div>
   </div>
   <script>
-    const STORAGE_KEY = 'loxin_smart_queue_v9';
-    const PUBLIC_URL_KEY = 'loxin_smart_queue_public_url_v9';
-    const SHOP_NAME_KEY = 'loxin_smart_queue_shop_name_v9';
-    const AUTO_PRINT_KEY = 'loxin_smart_queue_auto_print_v9';
-    const ROOM_ID_KEY = 'loxin_smart_queue_room_id_v9';
+    const STORAGE_KEY = 'loxin_smart_queue_v10';
+    const PUBLIC_URL_KEY = 'loxin_smart_queue_public_url_v10';
+    const SHOP_NAME_KEY = 'loxin_smart_queue_shop_name_v10';
+    const AUTO_PRINT_KEY = 'loxin_smart_queue_auto_print_v10';
+    const ROOM_ID_KEY = 'loxin_smart_queue_room_id_v10';
     const DEFAULT_RENDER_URL = window.location.protocol.startsWith('http') ? window.location.href.split('?')[0] : 'https://loxin-smart-queue.onrender.com';
 
     const LANG_LABELS = {
@@ -77,8 +77,18 @@
       'ko-KR': '🇰🇷 한국어'
     };
 
+    // Detect the default language of the customer's phone browser/OS
+    function detectPhoneDefaultLanguage() {
+      const rawLang = (navigator.language || (navigator.languages && navigator.languages[0]) || 'en-US').toLowerCase();
+      if (rawLang.startsWith('th')) return 'th-TH';
+      if (rawLang.startsWith('zh')) return 'zh-CN';
+      if (rawLang.startsWith('ja')) return 'ja-JP';
+      if (rawLang.startsWith('ko')) return 'ko-KR';
+      return 'en-US';
+    }
+
     let channel = null;
-    try { channel = new BroadcastChannel('loxin_queue_sync_v9'); } catch (e) {}
+    try { channel = new BroadcastChannel('loxin_queue_sync_v10'); } catch (e) {}
 
     let state = {
       queues: [],
@@ -88,7 +98,8 @@
       acknowledgedIds: {},
       alarmPlayingId: null,
       ttsEnabled: true,
-      ttsLanguage: localStorage.getItem('loxin_smart_queue_lang_v9') || 'th-TH',
+      ttsLanguage: localStorage.getItem('loxin_smart_queue_lang_v10') || 'th-TH',
+      mobileLanguage: detectPhoneDefaultLanguage(),
       autoPrint58mm: localStorage.getItem(AUTO_PRINT_KEY) !== 'false',
       shopName: localStorage.getItem(SHOP_NAME_KEY) || 'LOXIN GROUP CO., LTD.',
       publicBaseUrl: localStorage.getItem(PUBLIC_URL_KEY) || DEFAULT_RENDER_URL,
@@ -110,8 +121,8 @@
       state.customerQueueId = params.get('q');
       const qId = params.get('q'), qNum = params.get('n') || 'A001', qSrv = params.get('s') || 'ช่องบริการ 1';
       const qTarget = Number(params.get('t')) || (Date.now() + 300000), qWait = Number(params.get('w')) || 0, qName = params.get('c') || 'ลูกค้า';
-      const qLang = params.get('l') || 'th-TH';
-      state.ttsLanguage = qLang;
+      // Customer phone uses its own OS/Browser default language!
+      state.mobileLanguage = detectPhoneDefaultLanguage();
       if (params.get('shop')) state.shopName = params.get('shop');
       if (params.get('r')) state.roomId = params.get('r');
       setTimeout(() => {
@@ -123,7 +134,6 @@
             customerName: qName,
             targetTime: qTarget,
             waitingAheadInit: qWait,
-            lang: qLang,
             status: 'waiting',
             createdAt: Date.now()
           });
@@ -132,7 +142,7 @@
       }, 50);
     }
 
-    function getMqttTopic() { return `loxin_smart_queue_v9/${state.roomId}/state`; }
+    function getMqttTopic() { return `loxin_smart_queue_v10/${state.roomId}/state`; }
 
     function initAutoCloudSync() {
       if (typeof mqtt === 'undefined') return;
@@ -154,14 +164,7 @@
             const payload = JSON.parse(message.toString());
             if (payload && Array.isArray(payload.queues)) {
               state.queues = payload.queues;
-              if (state.mode === 'customer') {
-                const myQ = state.queues.find(x => x.id === state.customerQueueId);
-                if (myQ && myQ.lang) {
-                  state.ttsLanguage = myQ.lang;
-                } else if (payload.ttsLanguage) {
-                  state.ttsLanguage = payload.ttsLanguage;
-                }
-              } else {
+              if (state.mode !== 'customer') {
                 localStorage.setItem(STORAGE_KEY, JSON.stringify(state.queues));
               }
               checkAndTriggerCustomerAlarm();
@@ -178,7 +181,6 @@
         if (mqttClient && state.mqttConnected) {
           mqttClient.publish(getMqttTopic(), JSON.stringify({
             updatedAt: Date.now(),
-            ttsLanguage: state.ttsLanguage,
             queues: state.queues
           }), { qos: 1, retain: true });
         }
@@ -192,7 +194,7 @@
     function saveAndSyncQueues() {
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(state.queues));
-        if (channel) channel.postMessage({ type: 'SYNC', queues: state.queues, ttsLanguage: state.ttsLanguage });
+        if (channel) channel.postMessage({ type: 'SYNC', queues: state.queues });
         broadcastCloudState();
       } catch (e) {}
     }
@@ -208,11 +210,6 @@
       channel.onmessage = (e) => {
         if (e.data && e.data.type === 'SYNC') {
           state.queues = e.data.queues;
-          if (state.mode === 'customer') {
-            const myQ = state.queues.find(x => x.id === state.customerQueueId);
-            if (myQ && myQ.lang) state.ttsLanguage = myQ.lang;
-            else if (e.data.ttsLanguage) state.ttsLanguage = e.data.ttsLanguage;
-          }
           checkAndTriggerCustomerAlarm();
           render();
         }
@@ -240,7 +237,6 @@
         t: String(q.targetTime),
         w: String(waitingAhead),
         c: q.customerName,
-        l: q.lang || state.ttsLanguage,
         shop: state.shopName,
         r: state.roomId
       });
@@ -295,7 +291,7 @@
       if (!state.ttsEnabled || !('speechSynthesis' in window)) return;
       try {
         window.speechSynthesis.cancel();
-        let lang = langOverride || state.ttsLanguage || 'th-TH';
+        let lang = langOverride || (state.mode === 'customer' ? state.mobileLanguage : state.ttsLanguage) || 'th-TH';
         let text = '';
         const spelledQueue = queueNumber.split('').join(' ');
         if (lang === 'th-TH') {
@@ -326,8 +322,7 @@
     function startMobileAlarm(q) {
       if (!q || state.acknowledgedIds[q.id] || state.alarmPlayingId === q.id) return;
       state.alarmPlayingId = q.id;
-      const targetLang = q.lang || state.ttsLanguage || 'th-TH';
-      state.ttsLanguage = targetLang;
+      const targetLang = state.mobileLanguage || detectPhoneDefaultLanguage();
       playLoudMobileAlert(q.number, q.service);
       setTimeout(() => speakQueue(q.number, q.service, targetLang), 1100);
       if (alarmInterval) clearInterval(alarmInterval);
@@ -361,8 +356,7 @@
     window.unlockMobileAudio = async () => {
       state.soundUnlocked = true;
       const q = state.queues.find(item => item.id === state.customerQueueId);
-      const activeLang = (q && q.lang) ? q.lang : state.ttsLanguage;
-      state.ttsLanguage = activeLang;
+      const activeLang = state.mobileLanguage || detectPhoneDefaultLanguage();
       playLoudMobileAlert(q ? q.number : 'A001', q ? q.service : 'Counter 1');
       requestMobileWakeLock();
       try { if ('Notification' in window && Notification.permission === 'default') await Notification.requestPermission(); } catch (e) {}
@@ -378,9 +372,17 @@
     window.testSoundAndVibrateNow = () => {
       state.soundUnlocked = true;
       const q = state.queues.find(item => item.id === state.customerQueueId);
-      const activeLang = (q && q.lang) ? q.lang : state.ttsLanguage;
-      playLoudMobileAlert(q ? q.number : 'A001', q ? q.service : 'ช่องบริการ 1');
-      setTimeout(() => speakQueue(q ? q.number : 'A001', q ? q.service : 'ช่องบริการ 1', activeLang), 1100);
+      const activeLang = state.mobileLanguage || detectPhoneDefaultLanguage();
+      playLoudMobileAlert(q ? q.number : 'A001', q ? q.service : 'Counter 1');
+      setTimeout(() => speakQueue(q ? q.number : 'A001', q ? q.service : 'Counter 1', activeLang), 1100);
+      render();
+    };
+
+    window.changeMobileLanguage = (lang) => {
+      state.mobileLanguage = lang;
+      state.soundUnlocked = true;
+      const q = state.queues.find(item => item.id === state.customerQueueId);
+      speakQueue(q ? q.number : 'A001', q ? q.service : 'Counter 1', lang);
       render();
     };
 
@@ -410,14 +412,12 @@
         const customUnit = document.getElementById('qCustomDelayUnit')?.value || 'sec';
         if (customVal > 0) targetTime = Date.now() + (customUnit === 'min' ? Math.round(customVal * 60) : Math.round(customVal)) * 1000;
       }
-      // Stamp the dispenser's active language onto this ticket!
       const item = {
         id,
         number,
         service,
         customerName,
         targetTime,
-        lang: state.ttsLanguage,
         status: 'waiting',
         createdAt: Date.now()
       };
@@ -430,17 +430,14 @@
       const item = state.queues.find(q => q.id === id);
       if (!item) return;
       delete state.acknowledgedIds[id];
-      // Sync current staff language to this queue call so mobile speaks the exact same language
-      const activeLang = state.ttsLanguage || item.lang || 'th-TH';
       await persistQueue({
         ...item,
-        lang: activeLang,
         status: 'called',
         calledAt: Date.now(),
         callCount: (item.callCount || 0) + 1
       });
       playLoudMobileAlert(item.number, item.service);
-      setTimeout(() => speakQueue(item.number, item.service, activeLang), 900);
+      setTimeout(() => speakQueue(item.number, item.service, state.ttsLanguage), 900);
     };
 
     window.completeQueue = async (id) => {
@@ -449,27 +446,17 @@
     };
 
     window.deleteQueueItem = async (id) => { await removeQueue(id); };
-    window.selectCustomerPreview = (id) => {
-      state.customerQueueId = id;
-      const q = state.queues.find(x => x.id === id);
-      if (q && q.lang) state.ttsLanguage = q.lang;
+    window.selectCustomerPreview = (id) => { state.customerQueueId = id; render(); };
+    window.switchMode = (mode) => {
+      state.mode = mode;
+      if (mode === 'customer') state.mobileLanguage = detectPhoneDefaultLanguage();
       render();
     };
-    window.switchMode = (mode) => { state.mode = mode; render(); };
     window.toggleAutoPrint = () => { state.autoPrint58mm = !state.autoPrint58mm; localStorage.setItem(AUTO_PRINT_KEY, String(state.autoPrint58mm)); render(); };
     window.toggleTTS = () => { state.ttsEnabled = !state.ttsEnabled; render(); };
     window.changeLanguage = (lang) => {
       state.ttsLanguage = lang;
-      localStorage.setItem('loxin_smart_queue_lang_v9', lang);
-      // Update active preview queue language too if waiting
-      if (state.customerQueueId) {
-        const q = state.queues.find(x => x.id === state.customerQueueId);
-        if (q && q.status === 'waiting') {
-          q.lang = lang;
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(state.queues));
-        }
-      }
-      broadcastCloudState();
+      localStorage.setItem('loxin_smart_queue_lang_v10', lang);
       if (state.ttsEnabled) speakQueue('A001', 'Counter 1', lang);
       render();
     };
@@ -492,9 +479,8 @@
         if (q.status === 'waiting' && now >= q.targetTime) {
           q.status = 'called'; changed = true;
           if (state.mode === 'staff') {
-            const qLang = q.lang || state.ttsLanguage;
             playLoudMobileAlert(q.number, q.service);
-            setTimeout(() => speakQueue(q.number, q.service, qLang), 900);
+            setTimeout(() => speakQueue(q.number, q.service, state.ttsLanguage), 900);
           }
         }
       });
@@ -520,7 +506,7 @@
       const app = document.getElementById('app');
       if (state.mode === 'customer') {
         const q = state.queues.find(item => item.id === state.customerQueueId) || state.queues[state.queues.length - 1];
-        const activeLang = (q && q.lang) ? q.lang : state.ttsLanguage;
+        const activeLang = state.mobileLanguage || detectPhoneDefaultLanguage();
         const isAlarming = q && q.status === 'called' && !state.acknowledgedIds[q.id];
         const currentCalling = state.queues.filter(x => x.status === 'called').slice(-1)[0];
         const waitingAhead = q ? (state.queues.length > 1 ? state.queues.filter(x => x.status === 'waiting' && x.createdAt < q.createdAt).length : (q.waitingAheadInit || 0)) : 0;
@@ -528,49 +514,59 @@
           ${!state.soundUnlocked ? `
             <div class="fixed inset-0 bg-slate-950/95 backdrop-blur-md z-50 flex flex-col items-center justify-center p-6 text-center">
               <div class="w-20 h-20 rounded-full bg-amber-500/20 border-2 border-amber-400 flex items-center justify-center text-4xl mb-4 pulse-btn">🔔</div>
-              <h2 class="text-2xl font-extrabold text-white mb-2">บัตรคิวหมายเลข ${q ? q.number : ''}</h2>
+              <h2 class="text-2xl font-extrabold text-white mb-2">Queue No. ${q ? q.number : ''}</h2>
               <div class="inline-block px-3 py-1 rounded-full bg-slate-800 border border-amber-500/40 text-amber-300 text-xs font-semibold mb-3">
-                ภาษาเสียงเรียกคิว: ${LANG_LABELS[activeLang] || activeLang}
+                📱 Phone Language Detected: ${LANG_LABELS[activeLang] || activeLang}
               </div>
-              <p class="text-sm text-slate-300 max-w-xs mb-6">กรุณาแตะปุ่มด้านล่าง 1 ครั้ง เพื่อเปิดระบบ <b>เสียงกระดิ่ง + เสียงเรียกคิว (${LANG_LABELS[activeLang] || activeLang}) + ระบบสั่น</b></p>
-              <button onclick="unlockMobileAudio()" class="w-full max-w-xs py-4 px-6 rounded-2xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-base shadow-2xl pulse-btn">🔊 แตะเพื่อเปิดเสียงแจ้งเตือน & ระบบสั่น</button>
+              <p class="text-sm text-slate-300 max-w-xs mb-6">
+                Tap below once to activate <b>Bell Chime + Voice Alert (${LANG_LABELS[activeLang] || activeLang}) + Vibration</b>
+              </p>
+              <button onclick="unlockMobileAudio()" class="w-full max-w-xs py-4 px-6 rounded-2xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-base shadow-2xl pulse-btn">
+                🔊 Tap to Enable Sound & Vibration
+              </button>
             </div>
           ` : ''}
           <div class="min-h-screen flex flex-col items-center justify-between p-5 ${isAlarming ? 'alarm-active' : 'bg-slate-950'} transition-all">
-            <div class="w-full max-w-md flex justify-between items-center">
-              <span class="font-bold text-xs ${isAlarming ? 'text-slate-950' : 'text-amber-400'}">${state.shopName}</span>
-              <div class="flex items-center gap-2">
-                <span class="text-xs px-2.5 py-1 rounded-full ${isAlarming ? 'bg-slate-950/20 text-slate-950 font-bold' : 'bg-slate-900 border border-slate-700 text-slate-300'}">${LANG_LABELS[activeLang] || activeLang}</span>
-                <button onclick="testSoundAndVibrateNow()" class="text-xs px-3 py-1 rounded-full border ${isAlarming ? 'border-slate-900 text-slate-950 font-bold' : 'border-amber-500/40 text-amber-400'}">🔊 ทดสอบเสียง</button>
+            <div class="w-full max-w-md flex justify-between items-center gap-2">
+              <span class="font-bold text-xs ${isAlarming ? 'text-slate-950' : 'text-amber-400'} truncate">${state.shopName}</span>
+              <div class="flex items-center gap-1.5">
+                <select onchange="changeMobileLanguage(this.value)" class="text-xs px-2 py-1 rounded-full outline-none cursor-pointer ${isAlarming ? 'bg-slate-950/20 text-slate-950 font-bold border border-slate-900' : 'bg-slate-900 border border-slate-700 text-white'}">
+                  <option value="th-TH" ${activeLang === 'th-TH' ? 'selected' : ''}>🇹🇭 ไทย</option>
+                  <option value="en-US" ${activeLang === 'en-US' ? 'selected' : ''}>🇬🇧 English</option>
+                  <option value="zh-CN" ${activeLang === 'zh-CN' ? 'selected' : ''}>🇨🇳 中文</option>
+                  <option value="ja-JP" ${activeLang === 'ja-JP' ? 'selected' : ''}>🇯🇵 日本語</option>
+                  <option value="ko-KR" ${activeLang === 'ko-KR' ? 'selected' : ''}>🇰🇷 한국어</option>
+                </select>
+                <button onclick="testSoundAndVibrateNow()" class="text-xs px-2.5 py-1 rounded-full border ${isAlarming ? 'border-slate-900 text-slate-950 font-bold' : 'border-amber-500/40 text-amber-400'}">🔊 Test</button>
               </div>
             </div>
             ${q ? `
               <div class="w-full max-w-md bg-slate-900/95 border border-amber-500/30 rounded-3xl p-6 text-center shadow-2xl text-white my-auto">
                 <div class="flex justify-between items-center bg-slate-950/90 px-4 py-2.5 rounded-2xl border border-slate-800 mb-5 text-xs">
-                  <span class="text-slate-400">สถานะคิว:</span>
-                  <span class="font-bold text-amber-400">${q.status === 'waiting' ? `⏳ รอคิว (อีก ${waitingAhead} คิว)` : q.status === 'called' ? '🔔 ถึงคิวของคุณแล้ว!' : '✅ เสร็จสิ้น'}</span>
+                  <span class="text-slate-400">Status / สถานะ:</span>
+                  <span class="font-bold text-amber-400">${q.status === 'waiting' ? `⏳ Waiting (${waitingAhead} ahead)` : q.status === 'called' ? '🔔 YOUR TURN!' : '✅ Completed'}</span>
                 </div>
                 <span class="inline-block px-4 py-1 rounded-full text-xs font-semibold bg-amber-500/20 text-amber-400 mb-2">${q.service}</span>
                 <div class="text-7xl font-extrabold text-amber-400 my-2">${q.number}</div>
-                <p class="text-slate-300 text-sm mb-5">คุณ ${q.customerName}</p>
+                <p class="text-slate-300 text-sm mb-5">${q.customerName}</p>
                 <div class="grid grid-cols-2 gap-3 mb-5">
                   <div class="bg-slate-950/80 rounded-2xl p-3.5 border border-slate-800">
-                    <div class="text-[11px] text-slate-400">คิวปัจจุบัน</div>
+                    <div class="text-[11px] text-slate-400">Now Serving</div>
                     <div class="text-2xl font-bold text-emerald-400 mt-1">${currentCalling ? currentCalling.number : '-'}</div>
                   </div>
                   <div class="bg-slate-950/80 rounded-2xl p-3.5 border border-slate-800">
-                    <div class="text-[11px] text-slate-400">เวลานัดหมาย</div>
-                    <div class="text-lg font-bold text-white mt-1">${new Date(q.targetTime).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })} น.</div>
+                    <div class="text-[11px] text-slate-400">Est. Time</div>
+                    <div class="text-lg font-bold text-white mt-1">${new Date(q.targetTime).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })}</div>
                     <div class="text-[11px] text-amber-400" data-countdown="${q.targetTime}">--:--</div>
                   </div>
                 </div>
                 ${q.status === 'called' ? `
-                  <div class="bg-amber-500 text-slate-950 font-extrabold py-4 px-5 rounded-2xl mb-3 animate-bounce text-base">🔔 ถึงคิวของท่านแล้ว! ติดต่อ ${q.service}</div>
-                  <button onclick="stopMobileAlarm()" class="w-full py-3.5 rounded-xl bg-rose-600 text-white font-bold text-sm">🔕 รับทราบ / ปิดเสียงและหยุดสั่น</button>
-                ` : `<div class="py-3 px-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs">🔊 ซิงค์เสียงเรียกภาษา <b>${LANG_LABELS[activeLang] || activeLang}</b> ตามเครื่องออกคิวแล้ว</div>`}
+                  <div class="bg-amber-500 text-slate-950 font-extrabold py-4 px-5 rounded-2xl mb-3 animate-bounce text-base">🔔 Please proceed to ${q.service}</div>
+                  <button onclick="stopMobileAlarm()" class="w-full py-3.5 rounded-xl bg-rose-600 text-white font-bold text-sm">🔕 Acknowledge / Stop Alarm</button>
+                ` : `<div class="py-3 px-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs">🔊 Auto Voice Language: <b>${LANG_LABELS[activeLang] || activeLang}</b> (Device Default)</div>`}
               </div>
             ` : ''}
-            <div class="text-xs text-slate-500">Loxin Smart Queue v9 (Auto Language Sync)</div>
+            <div class="text-xs text-slate-500">Loxin Smart Queue v10 (Device Auto-Language)</div>
           </div>
         `;
         return;
@@ -582,21 +578,9 @@
             <div class="flex flex-wrap justify-between items-center border-b border-amber-500/20 pb-5 gap-4">
               <div>
                 <h1 class="text-2xl font-extrabold text-amber-400">${state.shopName}</h1>
-                <p class="text-sm text-slate-400">เลือกภาษาเสียงเรียกคิวของท่าน แล้วแตะรับบัตรคิว (58mm)</p>
+                <p class="text-sm text-slate-400">แตะเลือกประเภทบริการเพื่อรับบัตรคิว QR Code (58mm)</p>
               </div>
-              <div class="flex items-center gap-3">
-                <div class="flex items-center bg-slate-900 border border-amber-500/50 rounded-xl px-3 py-2">
-                  <span class="text-xs text-amber-400 font-bold mr-2">🌐 ภาษาเสียงเรียก:</span>
-                  <select onchange="changeLanguage(this.value)" class="bg-slate-900 text-sm font-bold text-white outline-none cursor-pointer">
-                    <option value="th-TH" ${state.ttsLanguage === 'th-TH' ? 'selected' : ''}>🇹🇭 ไทย (Thai)</option>
-                    <option value="en-US" ${state.ttsLanguage === 'en-US' ? 'selected' : ''}>🇬🇧 English</option>
-                    <option value="zh-CN" ${state.ttsLanguage === 'zh-CN' ? 'selected' : ''}>🇨🇳 中文 (จีน)</option>
-                    <option value="ja-JP" ${state.ttsLanguage === 'ja-JP' ? 'selected' : ''}>🇯🇵 日本語 (ญี่ปุ่น)</option>
-                    <option value="ko-KR" ${state.ttsLanguage === 'ko-KR' ? 'selected' : ''}>🇰🇷 한국어 (เกาหลี)</option>
-                  </select>
-                </div>
-                <button onclick="switchMode('staff')" class="px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-slate-300 text-xs">🔙 กลับหน้าเจ้าหน้าที่</button>
-              </div>
+              <button onclick="switchMode('staff')" class="px-4 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-slate-300 text-xs">🔙 กลับหน้าเจ้าหน้าที่</button>
             </div>
             <div class="max-w-4xl w-full mx-auto grid grid-cols-1 md:grid-cols-2 gap-6 my-auto py-8">
               <button onclick="issueQueueTicket('A', 'ช่องบริการ 1 (บริการทั่วไป)', 300)" class="p-8 rounded-3xl bg-slate-900 hover:bg-amber-500 border-2 border-amber-500/40 text-left group transition-all">
@@ -633,10 +617,10 @@
               <h1 class="text-lg font-bold text-white flex items-center gap-2">
                 <span>${state.shopName}</span>
                 <span class="text-xs font-semibold px-2.5 py-0.5 rounded-full ${state.mqttConnected ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40' : 'bg-amber-500/20 text-amber-400'}">
-                  ${state.mqttConnected ? '☁️ Cloud Sync อัตโนมัติ (v9)' : '⏳ กำลังเชื่อม Cloud...'}
+                  ${state.mqttConnected ? '☁️ Cloud Sync อัตโนมัติ (v10)' : '⏳ กำลังเชื่อม Cloud...'}
                 </span>
               </h1>
-              <p class="text-xs text-slate-400">เสียงเรียกคิวบนมือถือลูกค้าจะเปลี่ยนภาษาอัตโนมัติตามภาษาที่เครื่องออกคิวเลือก (5 ภาษา)</p>
+              <p class="text-xs text-slate-400">มือถือลูกค้าจะใช้เสียงเรียกคิวตามภาษา Default ของโทรศัพท์แต่ละเครื่องอัตโนมัติ (5 ภาษา)</p>
             </div>
           </div>
 
@@ -647,7 +631,7 @@
             </button>
             <div class="flex items-center bg-slate-950 border ${state.ttsEnabled ? 'border-amber-500/60' : 'border-slate-700'} rounded-xl overflow-hidden shadow">
               <button onclick="toggleTTS()" class="px-3 py-2 text-xs font-bold ${state.ttsEnabled ? 'bg-amber-500/20 text-amber-300' : 'bg-slate-800 text-slate-400'} border-r border-slate-800">
-                🗣️ เสียงเรียก: ${state.ttsEnabled ? 'เปิด' : 'ปิด'}
+                🗣️ เสียงลำโพงร้าน: ${state.ttsEnabled ? 'เปิด' : 'ปิด'}
               </button>
               <select id="ttsLangSelect" onchange="changeLanguage(this.value)" class="bg-slate-950 text-xs font-semibold text-white py-2 px-2.5 outline-none cursor-pointer" ${!state.ttsEnabled ? 'disabled' : ''}>
                 <option value="th-TH" ${state.ttsLanguage === 'th-TH' ? 'selected' : ''}>🇹🇭 ไทย (Thai)</option>
@@ -666,8 +650,8 @@
             <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
               <div class="flex justify-between items-center mb-4">
                 <h2 class="text-base font-bold text-amber-400">🎫 ออกบัตรคิว & ตั้งเวลาแจ้งเตือน</h2>
-                <span class="text-xs px-2.5 py-1 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-300 font-semibold">
-                  ภาษาของคิวนี้: ${LANG_LABELS[state.ttsLanguage] || state.ttsLanguage}
+                <span class="text-xs px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 font-semibold">
+                  📱 มือถือลูกค้าพูดตามภาษาเครื่องอัตโนมัติ
                 </span>
               </div>
               <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
@@ -720,9 +704,8 @@
                       <div class="flex items-center gap-4">
                         <div class="text-2xl font-extrabold text-amber-400 w-16">${q.number}</div>
                         <div>
-                          <div class="text-sm font-semibold text-white flex items-center gap-2">
-                            <span>${q.customerName} <span class="text-xs font-normal text-slate-400">(${q.service})</span></span>
-                            <span class="text-[11px] px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-amber-300">${LANG_LABELS[q.lang] || '🇹🇭 ไทย'}</span>
+                          <div class="text-sm font-semibold text-white">
+                            ${q.customerName} <span class="text-xs font-normal text-slate-400">(${q.service})</span>
                           </div>
                           <div class="text-xs text-slate-400 mt-0.5">เวลาแจ้งเตือน: ${new Date(q.targetTime).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit', second: '2-digit' })} น. • <span class="text-amber-400" data-countdown="${q.targetTime}">--:--</span></div>
                         </div>
@@ -754,7 +737,6 @@
                   <div class="text-5xl font-black my-1 leading-none">${previewQueue.number}</div>
                   <div class="text-[11px] font-semibold">คุณ ${previewQueue.customerName}</div>
                   <div class="text-[10px] text-neutral-700 mt-0.5">คิวรอหน้าคุณ: <b>${waitingAheadPreview}</b> คิว</div>
-                  <div class="text-[9px] text-neutral-600 mt-0.5">ภาษาเสียงเรียก: <b>${LANG_LABELS[previewQueue.lang] || 'ไทย'}</b></div>
                   <div class="border-t border-dashed border-black my-2"></div>
                   <div class="text-[10px] font-bold">สแกน QR เพื่อเช็คสถานะคิว</div>
                   <div id="qrcode-slip-preview" class="flex justify-center my-1.5"></div>
