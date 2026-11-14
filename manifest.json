@@ -1,7 +1,7 @@
 {
   "name": "Loxin Smart Queue 58mm Kiosk",
   "short_name": "SmartQueue",
-  "description": "ระบบออกบัตรคิว พิมพ์สลิป 58mm พร้อมสแกน QR Code เช็คสถานะคิวบนมือถือ",
+  "description": "ระบบออกบัตรคิว พิมพ์สลิป 58mm พร้อมสแกน QR Code เช็คสถานะคิวบนมือถือ (5 ภาษา)",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#0f172a",
