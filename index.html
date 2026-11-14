@@ -1,0 +1,927 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#0f172a" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>Loxin Smart Queue Kiosk & Thermal 58mm System</title>
+  <link rel="manifest" href="manifest.json" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Prompt', 'Segoe UI', Tahoma, sans-serif; background-color: #020617; color: #f8fafc; margin: 0; }
+    @keyframes pulse-ring {
+      0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(234, 179, 8, 0.7); }
+      70% { transform: scale(1); box-shadow: 0 0 0 20px rgba(234, 179, 8, 0); }
+      100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(234, 179, 8, 0); }
+    }
+    .alarm-active {
+      animation: pulse-ring 1.2s infinite;
+      background: linear-gradient(135deg, #ca8a04 0%, #eab308 100%) !important;
+      color: #0f172a !important;
+    }
+
+    /* ==========================================================
+       58mm Thermal Receipt Printer Styles (Actual Print Width ~48mm)
+       ========================================================== */
+    #thermal-print-area {
+      display: none;
+    }
+
+    @media print {
+      @page {
+        size: 58mm auto;
+        margin: 0mm !important;
+      }
+      html, body {
+        width: 58mm !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        background: #ffffff !important;
+        color: #000000 !important;
+      }
+      #app {
+        display: none !important;
+      }
+      #thermal-print-area {
+        display: block !important;
+        width: 48mm !important; /* Standard printable area for 58mm paper roll */
+        margin: 0 auto !important;
+        padding: 2mm 1mm 6mm 1mm !important;
+        font-family: 'Prompt', Tahoma, sans-serif !important;
+        color: #000000 !important;
+        background: #ffffff !important;
+        text-align: center !important;
+      }
+      #thermal-print-area * {
+        color: #000000 !important;
+        background: transparent !important;
+      }
+      .receipt-divider {
+        border-top: 1px dashed #000000 !important;
+        margin: 6px 0 !important;
+      }
+      #print-qr-container {
+        display: flex !important;
+        justify-content: center !important;
+        align-items: center !important;
+        margin: 6px auto !important;
+      }
+      #print-qr-container img, #print-qr-container canvas {
+        margin: 0 auto !important;
+        width: 136px !important;
+        height: 136px !important;
+      }
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen">
+  <!-- Main Interactive UI -->
+  <div id="app"></div>
+
+  <!-- Dedicated 58mm Thermal Receipt Print Container (Hidden on screen, visible only when printing) -->
+  <div id="thermal-print-area">
+    <div style="font-size: 13px; font-weight: 800; letter-spacing: 0.5px;" id="p-shop-name">LOXIN SMART QUEUE</div>
+    <div style="font-size: 10px;" id="p-service-name">ช่องบริการ 1</div>
+    <div class="receipt-divider"></div>
+    <div style="font-size: 10px; margin-top: 2px;">หมายเลขคิวของคุณ (QUEUE NO.)</div>
+    <div style="font-size: 42px; font-weight: 800; line-height: 1.05; margin: 4px 0;" id="p-queue-number">A001</div>
+    <div style="font-size: 10px; font-weight: 600;" id="p-customer-name">ลูกค้าทั่วไป</div>
+    <div style="font-size: 10px; margin-top: 2px;" id="p-wait-info">คิวรอหน้าคุณ: 0 คิว</div>
+    <div class="receipt-divider"></div>
+    <div style="font-size: 10px; font-weight: 700;">สแกน QR เพื่อเช็คสถานะคิว</div>
+    <div style="font-size: 9px;">และรับเสียงแจ้งเตือนบนมือถือ</div>
+    <div id="print-qr-container"></div>
+    <div style="font-size: 9px; font-weight: 600;" id="p-target-time">เวลาแจ้งเตือน: --:-- น.</div>
+    <div class="receipt-divider"></div>
+    <div style="font-size: 8px;" id="p-issued-time">วันที่พิมพ์: --/--/---- --:--</div>
+    <div style="font-size: 9px; font-weight: 600; margin-top: 3px;">ขอบคุณที่ใช้บริการครับ</div>
+    <div style="font-size: 8px; margin-top: 8px;">.</div>
+  </div>
+
+  <!-- Firebase & Local Sync Logic -->
+  <script>
+    if (window.location.protocol.startsWith('http')) {
+      const s = document.createElement('script');
+      s.type = 'module';
+      s.textContent = `
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+        import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+        window.FirebaseSDK = { initializeApp, getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, deleteDoc };
+        if (window.initCloudIfConfigured) window.initCloudIfConfigured();
+      `;
+      document.head.appendChild(s);
+    }
+
+    const STORAGE_KEY = 'loxin_smart_queue_v3';
+    const FB_CONFIG_KEY = 'loxin_smart_queue_fb_config';
+    const PUBLIC_URL_KEY = 'loxin_smart_queue_public_url';
+    const SHOP_NAME_KEY = 'loxin_smart_queue_shop_name';
+    const AUTO_PRINT_KEY = 'loxin_smart_queue_auto_print';
+
+    let channel = null;
+    try { channel = new BroadcastChannel('loxin_queue_sync_v3'); } catch (e) {}
+
+    let state = {
+      queues: [],
+      mode: 'staff', // 'staff' | 'kiosk' | 'customer'
+      customerQueueId: null,
+      soundUnlocked: false,
+      alarmPlayingId: null,
+      ttsEnabled: true,
+      autoPrint58mm: localStorage.getItem(AUTO_PRINT_KEY) !== 'false',
+      shopName: localStorage.getItem(SHOP_NAME_KEY) || 'LOXIN GROUP CO., LTD.',
+      publicBaseUrl: localStorage.getItem(PUBLIC_URL_KEY) || '',
+      cloudEnabled: false,
+      fbConfigStr: localStorage.getItem(FB_CONFIG_KEY) || '',
+      showSettingsModal: false
+    };
+
+    let db = null;
+    let audioCtx = null;
+    let alarmInterval = null;
+
+    // Parse URL parameters when customer scans QR Code from 58mm paper slip
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('q')) {
+      state.mode = 'customer';
+      state.customerQueueId = params.get('q');
+      // Pre-populate ticket metadata encoded in QR URL so mobile works immediately even before Cloud syncs!
+      const qId = params.get('q');
+      const qNum = params.get('n') || 'A001';
+      const qSrv = params.get('s') || 'ช่องบริการ 1';
+      const qTarget = Number(params.get('t')) || (Date.now() + 300000);
+      const qWait = Number(params.get('w')) || 0;
+      const qName = params.get('c') || 'ลูกค้า';
+      const qShop = params.get('shop') || state.shopName;
+      state.shopName = qShop;
+
+      setTimeout(() => {
+        if (!state.queues.find(x => x.id === qId)) {
+          state.queues.push({
+            id: qId,
+            number: qNum,
+            service: qSrv,
+            customerName: qName,
+            targetTime: qTarget,
+            waitingAheadInit: qWait,
+            status: 'waiting',
+            createdAt: Date.now()
+          });
+          render();
+        }
+      }, 100);
+    }
+
+    function loadLocalQueues() {
+      try {
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (saved) state.queues = JSON.parse(saved);
+      } catch (e) {}
+    }
+
+    function saveLocalQueues() {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state.queues));
+        if (channel) channel.postMessage({ type: 'SYNC', queues: state.queues });
+      } catch (e) {}
+    }
+
+    window.addEventListener('storage', (e) => {
+      if (e.key === STORAGE_KEY && !state.cloudEnabled) {
+        loadLocalQueues();
+        render();
+      }
+    });
+
+    if (channel) {
+      channel.onmessage = (e) => {
+        if (e.data && e.data.type === 'SYNC' && !state.cloudEnabled) {
+          state.queues = e.data.queues;
+          render();
+        }
+      };
+    }
+
+    window.initCloudIfConfigured = function() {
+      if (!state.fbConfigStr || !window.FirebaseSDK) return;
+      try {
+        const cfg = JSON.parse(state.fbConfigStr);
+        const app = window.FirebaseSDK.initializeApp(cfg);
+        db = window.FirebaseSDK.getFirestore(app);
+        state.cloudEnabled = true;
+
+        const qCol = window.FirebaseSDK.collection(db, 'smart_queues');
+        window.FirebaseSDK.onSnapshot(qCol, (snapshot) => {
+          const list = [];
+          snapshot.forEach(docSnap => list.push(docSnap.data()));
+          list.sort((a, b) => a.createdAt - b.createdAt);
+          state.queues = list;
+          render();
+        });
+      } catch (err) {
+        state.cloudEnabled = false;
+      }
+    };
+
+    async function persistQueue(item) {
+      if (state.cloudEnabled && db && window.FirebaseSDK) {
+        await window.FirebaseSDK.setDoc(window.FirebaseSDK.doc(db, 'smart_queues', item.id), item);
+      } else {
+        const idx = state.queues.findIndex(q => q.id === item.id);
+        if (idx >= 0) state.queues[idx] = item;
+        else state.queues.push(item);
+        saveLocalQueues();
+        render();
+      }
+    }
+
+    async function removeQueue(id) {
+      if (state.cloudEnabled && db && window.FirebaseSDK) {
+        await window.FirebaseSDK.deleteDoc(window.FirebaseSDK.doc(db, 'smart_queues', id));
+      } else {
+        state.queues = state.queues.filter(q => q.id !== id);
+        saveLocalQueues();
+        render();
+      }
+    }
+
+    // Build QR Code URL that works on real mobile phones when scanned from 58mm paper
+    function getTicketScanUrl(q) {
+      let base = state.publicBaseUrl.trim();
+      if (!base) {
+        base = window.location.href.split('?')[0];
+      }
+      const waitingAhead = state.queues.filter(x => x.status === 'waiting' && x.createdAt < q.createdAt).length;
+      const query = new URLSearchParams({
+        q: q.id,
+        n: q.number,
+        s: q.service,
+        t: String(q.targetTime),
+        w: String(waitingAhead),
+        c: q.customerName,
+        shop: state.shopName
+      });
+      return `${base}?${query.toString()}`;
+    }
+
+    // Populate 58mm Thermal Slip & Trigger Printer
+    window.print58mmSlip = function(queueId) {
+      const q = state.queues.find(item => item.id === queueId);
+      if (!q) return;
+
+      const waitingAhead = state.queues.filter(x => x.status === 'waiting' && x.createdAt < q.createdAt).length;
+      const scanUrl = getTicketScanUrl(q);
+
+      document.getElementById('p-shop-name').textContent = state.shopName;
+      document.getElementById('p-service-name').textContent = q.service;
+      document.getElementById('p-queue-number').textContent = q.number;
+      document.getElementById('p-customer-name').textContent = `คุณ ${q.customerName}`;
+      document.getElementById('p-wait-info').textContent = `คิวรอหน้าคุณ: ${waitingAhead} คิว`;
+      document.getElementById('p-target-time').textContent = `เวลาแจ้งเตือน: ${new Date(q.targetTime).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })} น.`;
+      document.getElementById('p-issued-time').textContent = `ออกบัตร: ${new Date(q.createdAt).toLocaleString('th-TH', { dateStyle: 'short', timeStyle: 'short' })}`;
+
+      const qrBox = document.getElementById('print-qr-container');
+      qrBox.innerHTML = '';
+      if (typeof QRCode !== 'undefined') {
+        new QRCode(qrBox, {
+          text: scanUrl,
+          width: 136,
+          height: 136,
+          colorDark: "#000000",
+          colorLight: "#ffffff",
+          correctLevel: QRCode.CorrectLevel.M
+        });
+      } else {
+        qrBox.innerHTML = `<img src="https://api.qrserver.com/v1/create-qr-code/?size=136x136&data=${encodeURIComponent(scanUrl)}" width="136" height="136" />`;
+      }
+
+      // Allow QR canvas/image to render before invoking thermal print dialog
+      setTimeout(() => {
+        window.print();
+      }, 280);
+    };
+
+    function playChimeTone() {
+      try {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+
+        const now = audioCtx.currentTime;
+        const freqs = [587.33, 880, 1174.66];
+        freqs.forEach((f, i) => {
+          const osc = audioCtx.createOscillator();
+          const gain = audioCtx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(f, now + i * 0.18);
+          gain.gain.setValueAtTime(0.001, now + i * 0.18);
+          gain.gain.exponentialRampToValueAtTime(0.35, now + i * 0.18 + 0.04);
+          gain.gain.exponentialRampToValueAtTime(0.001, now + i * 0.18 + 0.9);
+          osc.connect(gain);
+          gain.connect(audioCtx.destination);
+          osc.start(now + i * 0.18);
+          osc.stop(now + i * 0.18 + 0.95);
+        });
+      } catch (e) {}
+    }
+
+    function speakThaiQueue(queueNumber, serviceName) {
+      if (!state.ttsEnabled || !('speechSynthesis' in window)) return;
+      try {
+        window.speechSynthesis.cancel();
+        const msg = new SpeechSynthesisUtterance(`ขอเชิญหมายเลขคิว ${queueNumber.split('').join(' ')} ติดต่อ ${serviceName} ค่ะ`);
+        msg.lang = 'th-TH';
+        msg.rate = 0.95;
+        window.speechSynthesis.speak(msg);
+      } catch (e) {}
+    }
+
+    function startMobileAlarm(queueId) {
+      if (state.alarmPlayingId === queueId) return;
+      state.alarmPlayingId = queueId;
+      playChimeTone();
+      if (navigator.vibrate) navigator.vibrate([500, 200, 500, 200, 800]);
+      alarmInterval = setInterval(() => {
+        playChimeTone();
+        if (navigator.vibrate) navigator.vibrate([500, 200, 500]);
+      }, 2500);
+    }
+
+    function stopMobileAlarm() {
+      state.alarmPlayingId = null;
+      if (alarmInterval) {
+        clearInterval(alarmInterval);
+        alarmInterval = null;
+      }
+      if (navigator.vibrate) navigator.vibrate(0);
+      render();
+    }
+
+    window.unlockMobileAudio = () => {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+      playChimeTone();
+      if (navigator.vibrate) navigator.vibrate(150);
+      state.soundUnlocked = true;
+      render();
+    };
+
+    // Issue New Queue & Auto Print to 58mm Thermal Printer
+    window.issueQueueTicket = async (prefixOverride = null, serviceOverride = null, delaySeconds = null) => {
+      const prefix = prefixOverride || document.getElementById('qPrefix')?.value || 'A';
+      const service = serviceOverride || document.getElementById('qService')?.value || 'ช่องบริการ 1';
+      const customerName = document.getElementById('qName')?.value || 'ลูกค้าทั่วไป';
+      const timeInput = document.getElementById('qTime')?.value;
+
+      const count = state.queues.filter(q => q.number.startsWith(prefix)).length + 1;
+      const number = `${prefix}${String(count).padStart(3, '0')}`;
+      const id = `Q${Date.now().toString().slice(-6)}`;
+
+      let targetTime = Date.now() + 5 * 60 * 1000; // Default 5 mins
+      if (delaySeconds !== null) {
+        targetTime = Date.now() + delaySeconds * 1000;
+      } else if (timeInput) {
+        const [hh, mm] = timeInput.split(':').map(Number);
+        const d = new Date();
+        d.setHours(hh, mm, 0, 0);
+        if (d.getTime() < Date.now()) d.setDate(d.getDate() + 1);
+        targetTime = d.getTime();
+      }
+
+      const item = {
+        id,
+        number,
+        service,
+        customerName,
+        targetTime,
+        status: 'waiting',
+        createdAt: Date.now()
+      };
+
+      await persistQueue(item);
+      state.customerQueueId = id;
+      render();
+
+      if (state.autoPrint58mm) {
+        window.print58mmSlip(id);
+      }
+    };
+
+    window.callQueueNow = async (id) => {
+      const item = state.queues.find(q => q.id === id);
+      if (!item) return;
+      const updated = { ...item, status: 'called', calledAt: Date.now() };
+      await persistQueue(updated);
+      speakThaiQueue(item.number, item.service);
+    };
+
+    window.completeQueue = async (id) => {
+      const item = state.queues.find(q => q.id === id);
+      if (!item) return;
+      await persistQueue({ ...item, status: 'completed' });
+    };
+
+    window.deleteQueueItem = async (id) => {
+      await removeQueue(id);
+    };
+
+    window.selectCustomerPreview = (id) => {
+      state.customerQueueId = id;
+      render();
+    };
+
+    window.switchMode = (mode) => {
+      state.mode = mode;
+      render();
+    };
+
+    window.toggleAutoPrint = () => {
+      state.autoPrint58mm = !state.autoPrint58mm;
+      localStorage.setItem(AUTO_PRINT_KEY, String(state.autoPrint58mm));
+      render();
+    };
+
+    window.saveSystemSettings = () => {
+      const shopVal = document.getElementById('shopNameInput').value.trim() || 'LOXIN SMART QUEUE';
+      const pubUrlVal = document.getElementById('publicUrlInput').value.trim();
+      const fbVal = document.getElementById('fbConfigInput').value.trim();
+
+      state.shopName = shopVal;
+      state.publicBaseUrl = pubUrlVal;
+      state.fbConfigStr = fbVal;
+
+      localStorage.setItem(SHOP_NAME_KEY, shopVal);
+      localStorage.setItem(PUBLIC_URL_KEY, pubUrlVal);
+      localStorage.setItem(FB_CONFIG_KEY, fbVal);
+
+      state.showSettingsModal = false;
+      window.initCloudIfConfigured();
+      render();
+    };
+
+    window.copyQueueUrl = (id) => {
+      const q = state.queues.find(x => x.id === id);
+      if (!q) return;
+      const url = getTicketScanUrl(q);
+      navigator.clipboard.writeText(url);
+      alert('คัดลอกลิงก์เช็คสถานะคิวเรียบร้อยแล้ว:\n' + url);
+    };
+
+    // Real-time countdown & automatic alarm trigger
+    setInterval(() => {
+      const now = Date.now();
+      state.queues.forEach(q => {
+        if (q.status === 'waiting' && now >= q.targetTime) {
+          q.status = 'called';
+          if (state.mode === 'staff') {
+            speakThaiQueue(q.number, q.service);
+          }
+          if (!state.cloudEnabled) {
+            saveLocalQueues();
+            render();
+          } else {
+            persistQueue(q);
+          }
+        }
+      });
+
+      const activeCustQ = state.queues.find(q => q.id === state.customerQueueId);
+      if (activeCustQ && activeCustQ.status === 'called' && state.soundUnlocked) {
+        startMobileAlarm(activeCustQ.id);
+      }
+
+      document.querySelectorAll('[data-countdown]').forEach(el => {
+        const target = Number(el.getAttribute('data-countdown'));
+        const diff = Math.max(0, Math.floor((target - now) / 1000));
+        const m = String(Math.floor(diff / 60)).padStart(2, '0');
+        const s = String(diff % 60).padStart(2, '0');
+        el.textContent = diff > 0 ? `${m}:${s} นาที` : 'ถึงเวลาเรียกคิวแล้ว!';
+      });
+    }, 1000);
+
+    function renderQR(elementId, url, size = 128) {
+      setTimeout(() => {
+        const el = document.getElementById(elementId);
+        if (!el) return;
+        el.innerHTML = '';
+        if (typeof QRCode !== 'undefined') {
+          new QRCode(el, {
+            text: url,
+            width: size,
+            height: size,
+            colorDark: "#000000",
+            colorLight: "#ffffff",
+            correctLevel: QRCode.CorrectLevel.M
+          });
+        } else {
+          el.innerHTML = `<img src="https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(url)}" alt="QR" width="${size}" height="${size}" />`;
+        }
+      }, 30);
+    }
+
+    function render() {
+      const app = document.getElementById('app');
+
+      // ==========================================================
+      // MODE 1: CUSTOMER MOBILE STATUS CHECK VIEW (Scanned from 58mm QR)
+      // ==========================================================
+      if (state.mode === 'customer') {
+        const q = state.queues.find(item => item.id === state.customerQueueId) || state.queues[state.queues.length - 1];
+        const isAlarming = q && q.status === 'called';
+        const currentCalling = state.queues.filter(x => x.status === 'called').slice(-1)[0];
+        const waitingAhead = q
+          ? (state.queues.length > 1
+              ? state.queues.filter(x => x.status === 'waiting' && x.createdAt < q.createdAt).length
+              : (q.waitingAheadInit || 0))
+          : 0;
+
+        app.innerHTML = `
+          <div class="min-h-screen flex flex-col items-center justify-between p-5 ${isAlarming ? 'alarm-active' : 'bg-slate-950'} transition-all duration-300">
+            <div class="w-full max-w-md flex justify-between items-center">
+              <div class="flex items-center gap-2">
+                <div class="w-3 h-3 rounded-full bg-amber-400"></div>
+                <span class="font-bold tracking-wider text-xs ${isAlarming ? 'text-slate-950' : 'text-amber-400'}">${state.shopName}</span>
+              </div>
+              <button onclick="switchMode('staff')" class="text-xs px-3 py-1 rounded-full border ${isAlarming ? 'border-slate-900 text-slate-950' : 'border-slate-800 text-slate-500'}">
+                หน้าเจ้าหน้าที่
+              </button>
+            </div>
+
+            ${q ? `
+              <div class="w-full max-w-md bg-slate-900/95 border border-amber-500/30 rounded-3xl p-6 text-center shadow-2xl text-white my-auto">
+                <div class="flex justify-between items-center bg-slate-950/90 px-4 py-2.5 rounded-2xl border border-slate-800 mb-5 text-xs">
+                  <span class="text-slate-400">สถานะคิวของคุณ:</span>
+                  ${q.status === 'waiting' ? `
+                    <span class="px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-400 font-bold">⏳ กำลังรอคิว (อีก ${waitingAhead} คิว)</span>
+                  ` : q.status === 'called' ? `
+                    <span class="px-2.5 py-0.5 rounded-full bg-emerald-500 text-slate-950 font-bold animate-pulse">🔔 ถึงคิวของคุณแล้ว!</span>
+                  ` : `
+                    <span class="px-2.5 py-0.5 rounded-full bg-slate-800 text-slate-400">✅ เสร็จสิ้นแล้ว</span>
+                  `}
+                </div>
+
+                <span class="inline-block px-4 py-1 rounded-full text-xs font-semibold bg-amber-500/20 text-amber-400 mb-2">
+                  ${q.service}
+                </span>
+                <p class="text-slate-400 text-xs">หมายเลขคิวของคุณ</p>
+                <div class="text-7xl font-extrabold text-amber-400 my-2 tracking-wider">${q.number}</div>
+                <p class="text-slate-300 text-sm font-medium mb-5">คุณ ${q.customerName}</p>
+
+                <div class="grid grid-cols-2 gap-3 mb-5">
+                  <div class="bg-slate-950/80 rounded-2xl p-3.5 border border-slate-800">
+                    <div class="text-[11px] text-slate-400">คิวที่กำลังเรียกตอนนี้</div>
+                    <div class="text-2xl font-bold text-emerald-400 mt-1">${currentCalling ? currentCalling.number : (q.status === 'called' ? q.number : '-')}</div>
+                  </div>
+                  <div class="bg-slate-950/80 rounded-2xl p-3.5 border border-slate-800">
+                    <div class="text-[11px] text-slate-400">เวลาแจ้งเตือนนัดหมาย</div>
+                    <div class="text-lg font-bold text-white mt-1">
+                      ${new Date(q.targetTime).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })} น.
+                    </div>
+                    <div class="text-[11px] text-amber-400" data-countdown="${q.targetTime}">กำลังคำนวณ...</div>
+                  </div>
+                </div>
+
+                ${q.status === 'called' ? `
+                  <div class="bg-amber-500 text-slate-950 font-extrabold py-4 px-5 rounded-2xl mb-3 animate-bounce text-base">
+                    🔔 ถึงคิวของท่านแล้ว! กรุณาติดต่อ ${q.service}
+                  </div>
+                  <button onclick="stopMobileAlarm()" class="w-full py-3.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold border border-slate-600 text-sm">
+                    รับทราบ / ปิดเสียงแจ้งเตือน
+                  </button>
+                ` : q.status === 'completed' ? `
+                  <div class="bg-emerald-500/20 text-emerald-400 py-3 px-4 rounded-xl font-medium text-sm">
+                    ✅ ให้บริการเสร็จสิ้นแล้ว ขอบคุณที่ใช้บริการครับ
+                  </div>
+                ` : `
+                  ${!state.soundUnlocked ? `
+                    <button onclick="unlockMobileAudio()" class="w-full py-4 px-5 rounded-2xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold shadow-lg shadow-amber-500/20 transition text-sm">
+                      🔊 แตะที่นี่ 1 ครั้ง เพื่อเปิดเสียงเตือนเมื่อถึงคิว
+                    </button>
+                    <p class="text-[11px] text-slate-400 mt-2">* เมื่อถึงเวลาหรือเจ้าหน้าที่กดเรียกคิว มือถือจะส่งเสียงดังและสั่นอัตโนมัติ</p>
+                  ` : `
+                    <div class="py-3 px-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-medium">
+                      🔊 เปิดระบบเสียงแจ้งเตือนและสั่นอัตโนมัติพร้อมทำงานแล้ว
+                    </div>
+                  `}
+                `}
+              </div>
+            ` : `
+              <div class="text-center text-slate-400 my-auto">
+                <p class="text-lg">ไม่พบข้อมูลบัตรคิวนี้</p>
+              </div>
+            `}
+
+            <div class="text-xs ${isAlarming ? 'text-slate-950 font-medium' : 'text-slate-500'}">
+              ระบบเช็คสถานะคิวอัจฉริยะผ่าน QR Code
+            </div>
+          </div>
+        `;
+        return;
+      }
+
+      // ==========================================================
+      // MODE 2: SELF-SERVICE KIOSK TOUCHSCREEN MODE (ตู้กดบัตรคิวอัตโนมัติ)
+      // ==========================================================
+      if (state.mode === 'kiosk') {
+        app.innerHTML = `
+          <div class="min-h-screen bg-slate-950 flex flex-col justify-between p-8">
+            <div class="flex justify-between items-center border-b border-amber-500/20 pb-5">
+              <div>
+                <h1 class="text-2xl font-extrabold text-amber-400 tracking-wide">${state.shopName}</h1>
+                <p class="text-sm text-slate-400">กรุณาแตะเลือกประเภทบริการเพื่อรับสลิปบัตรคิว QR Code (58mm)</p>
+              </div>
+              <button onclick="switchMode('staff')" class="px-4 py-2 rounded-xl bg-slate-900 border border-slate-700 text-slate-300 text-xs hover:bg-slate-800">
+                🔙 กลับหน้าควบคุมเจ้าหน้าที่
+              </button>
+            </div>
+
+            <div class="max-w-4xl w-full mx-auto grid grid-cols-1 md:grid-cols-2 gap-6 my-auto py-8">
+              <button onclick="issueQueueTicket('A', 'ช่องบริการ 1 (บริการทั่วไป)', 300)" class="group p-8 rounded-3xl bg-slate-900 hover:bg-amber-500 border-2 border-amber-500/40 text-left transition-all shadow-2xl">
+                <div class="text-xs font-bold text-amber-400 group-hover:text-slate-950 uppercase">หมวด A</div>
+                <div class="text-3xl font-extrabold text-white group-hover:text-slate-950 my-2">บริการทั่วไป / สอบถาม</div>
+                <div class="text-sm text-slate-400 group-hover:text-slate-900">แตะเพื่อพิมพ์บัตรคิว 58mm + QR Code ทันที</div>
+              </button>
+
+              <button onclick="issueQueueTicket('B', 'ช่องบริการ 2 (ฝ่ายขาย / ชำระเงิน)', 300)" class="group p-8 rounded-3xl bg-slate-900 hover:bg-amber-500 border-2 border-amber-500/40 text-left transition-all shadow-2xl">
+                <div class="text-xs font-bold text-amber-400 group-hover:text-slate-950 uppercase">หมวด B</div>
+                <div class="text-3xl font-extrabold text-white group-hover:text-slate-950 my-2">ฝ่ายขาย / ชำระเงิน</div>
+                <div class="text-sm text-slate-400 group-hover:text-slate-900">แตะเพื่อพิมพ์บัตรคิว 58mm + QR Code ทันที</div>
+              </button>
+
+              <button onclick="issueQueueTicket('C', 'ช่องบริการ 3 (ซ่อมบำรุง / เคลมสินค้า)', 600)" class="group p-8 rounded-3xl bg-slate-900 hover:bg-amber-500 border-2 border-amber-500/40 text-left transition-all shadow-2xl">
+                <div class="text-xs font-bold text-amber-400 group-hover:text-slate-950 uppercase">หมวด C</div>
+                <div class="text-3xl font-extrabold text-white group-hover:text-slate-950 my-2">ซ่อมบำรุง / เคลมสินค้า</div>
+                <div class="text-sm text-slate-400 group-hover:text-slate-900">แตะเพื่อพิมพ์บัตรคิว 58mm + QR Code ทันที</div>
+              </button>
+
+              <button onclick="issueQueueTicket('V', 'ช่องบริการ VIP พิเศษ', 180)" class="group p-8 rounded-3xl bg-slate-900 hover:bg-amber-500 border-2 border-amber-500/40 text-left transition-all shadow-2xl">
+                <div class="text-xs font-bold text-amber-400 group-hover:text-slate-950 uppercase">หมวด V</div>
+                <div class="text-3xl font-extrabold text-white group-hover:text-slate-950 my-2">ลูกค้า VIP / นัดหมายล่วงหน้า</div>
+                <div class="text-sm text-slate-400 group-hover:text-slate-900">แตะเพื่อพิมพ์บัตรคิว 58mm + QR Code ทันที</div>
+              </button>
+            </div>
+
+            <div class="text-center text-xs text-slate-500">
+              🖨️ เชื่อมต่อเครื่องพิมพ์ใบเสร็จความร้อน Thermal Printer ขนาด 58 mm พร้อมพิมพ์อัตโนมัติ
+            </div>
+          </div>
+        `;
+        return;
+      }
+
+      // ==========================================================
+      // MODE 3: STAFF POS / QUEUE DISPENSER & 58MM THERMAL SLIP PREVIEW
+      // ==========================================================
+      const previewQueue = state.queues.find(q => q.id === state.customerQueueId) || state.queues[state.queues.length - 1];
+      const previewUrl = previewQueue ? getTicketScanUrl(previewQueue) : window.location.href.split('?')[0];
+      const waitingAheadPreview = previewQueue
+        ? state.queues.filter(x => x.status === 'waiting' && x.createdAt < previewQueue.createdAt).length
+        : 0;
+
+      app.innerHTML = `
+        <header class="bg-slate-900 border-b border-amber-500/20 px-6 py-4 flex flex-wrap justify-between items-center gap-4">
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-400 to-amber-600 flex items-center justify-center text-slate-950 font-extrabold text-xl shadow-lg">
+              Q
+            </div>
+            <div>
+              <h1 class="text-lg font-bold text-white tracking-wide">${state.shopName} <span class="text-xs font-normal px-2 py-0.5 rounded bg-amber-500/20 text-amber-400 ml-1">Thermal 58mm Kiosk</span></h1>
+              <p class="text-xs text-slate-400">ระบบกดออกบัตรคิว + พิมพ์สลิปความร้อน 58 mm พร้อม QR Code ให้ลูกค้าสแกนเช็คคิวบนมือถือ</p>
+            </div>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-2">
+            <button onclick="switchMode('kiosk')" class="px-3.5 py-2 rounded-xl text-xs font-bold bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/50 text-amber-300">
+              🖥️ เปิดหน้าจอตู้กดคิว (Kiosk)
+            </button>
+            <button onclick="toggleAutoPrint()" class="px-3 py-2 rounded-xl text-xs font-medium border ${state.autoPrint58mm ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-400' : 'bg-slate-800 border-slate-700 text-slate-400'}">
+              🖨️ พิมพ์ 58mm อัตโนมัติ: ${state.autoPrint58mm ? 'เปิด' : 'ปิด'}
+            </button>
+            <button onclick="state.ttsEnabled = !state.ttsEnabled; render();" class="px-3 py-2 rounded-xl text-xs font-medium border ${state.ttsEnabled ? 'bg-amber-500/10 border-amber-500/40 text-amber-400' : 'bg-slate-800 border-slate-700 text-slate-400'}">
+              🗣️ เสียงเรียกคิว: ${state.ttsEnabled ? 'เปิด' : 'ปิด'}
+            </button>
+            <button onclick="state.showSettingsModal = true; render();" class="px-3.5 py-2 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-400 text-slate-950">
+              ⚙️ ตั้งค่าเครื่องพิมพ์ / ลิงก์ QR มือถือ
+            </button>
+          </div>
+        </header>
+
+        <main class="max-w-7xl mx-auto p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+          <!-- Left 7 Cols: Issue Queue & Active Queue Management -->
+          <div class="lg:col-span-7 space-y-6">
+            <!-- Quick Issue & Thermal Print Box -->
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
+              <div class="flex justify-between items-center mb-4">
+                <h2 class="text-base font-bold text-amber-400 flex items-center gap-2">
+                  <span>🖨️</span> กดออกบัตรคิว & พิมพ์สลิป Thermal 58 mm
+                </h2>
+                <span class="text-xs text-slate-400">ขนาดกระดาษมาตรฐาน 58 mm (พื้นที่พิมพ์ 48 mm)</span>
+              </div>
+
+              <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+                <div>
+                  <label class="block text-xs text-slate-400 mb-1">หมวดคิว (Prefix)</label>
+                  <select id="qPrefix" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white">
+                    <option value="A">A - บริการทั่วไป</option>
+                    <option value="B">B - ฝ่ายขาย / ชำระเงิน</option>
+                    <option value="C">C - ซ่อมบำรุง / IT Support</option>
+                    <option value="V">V - ลูกค้า VIP</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="block text-xs text-slate-400 mb-1">ช่องบริการ (แสดงบนสลิป)</label>
+                  <input id="qService" type="text" value="ช่องบริการ 1" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white" />
+                </div>
+                <div>
+                  <label class="block text-xs text-slate-400 mb-1">ชื่อลูกค้า / หมายเหตุ</label>
+                  <input id="qName" type="text" placeholder="ลูกค้าทั่วไป" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white" />
+                </div>
+              </div>
+
+              <div class="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
+                <div class="sm:col-span-4">
+                  <label class="block text-xs text-slate-400 mb-1">เวลาแจ้งเตือนนัดหมาย (HH:MM)</label>
+                  <input id="qTime" type="time" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white" />
+                </div>
+                <div class="sm:col-span-8 flex flex-wrap gap-2">
+                  <button onclick="issueQueueTicket(null, null, 15)" class="py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 border border-amber-500/40 text-amber-400 text-xs font-semibold">
+                    ⚡ ออกคิวทดสอบ (15 วิ)
+                  </button>
+                  <button onclick="issueQueueTicket(null, null, null)" class="flex-1 py-2.5 px-5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-sm font-extrabold shadow-lg">
+                    🖨️ ออกบัตรคิว + พิมพ์สลิป 58mm
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Queue Control List -->
+            <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
+              <div class="flex justify-between items-center mb-4">
+                <h2 class="text-base font-bold text-white">📋 รายการคิวทั้งหมด (${state.queues.length})</h2>
+                <span class="text-xs text-slate-400">คลิกที่รายการเพื่อดูตัวอย่างสลิป 58mm หรือสั่งพิมพ์ซ้ำ</span>
+              </div>
+
+              ${state.queues.length === 0 ? `
+                <div class="text-center py-10 text-slate-500 text-sm border border-dashed border-slate-800 rounded-xl">
+                  ยังไม่มีคิวในระบบ กดปุ่ม "ออกบัตรคิว + พิมพ์สลิป 58mm" ด้านบนเพื่อเริ่มต้น
+                </div>
+              ` : `
+                <div class="space-y-3 max-h-[420px] overflow-y-auto pr-1">
+                  ${state.queues.map(q => `
+                    <div onclick="selectCustomerPreview('${q.id}')" class="cursor-pointer p-4 rounded-xl border transition flex flex-wrap justify-between items-center gap-3 ${previewQueue && previewQueue.id === q.id ? 'bg-slate-800/90 border-amber-500/60' : 'bg-slate-950/70 border-slate-800 hover:border-slate-700'}">
+                      <div class="flex items-center gap-4">
+                        <div class="text-2xl font-extrabold text-amber-400 w-16">${q.number}</div>
+                        <div>
+                          <div class="text-sm font-semibold text-white">${q.customerName} <span class="text-xs font-normal text-slate-400">(${q.service})</span></div>
+                          <div class="text-xs text-slate-400 mt-0.5">
+                            เวลาแจ้งเตือน: <span class="text-slate-200">${new Date(q.targetTime).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })} น.</span>
+                            • สถานะ: <span class="text-amber-400 font-medium" data-countdown="${q.targetTime}">--:--</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div class="flex items-center gap-2" onclick="event.stopPropagation()">
+                        <button onclick="print58mmSlip('${q.id}')" class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-medium" title="พิมพ์สลิป 58mm ซ้ำ">
+                          🖨️ พิมพ์ 58mm
+                        </button>
+                        ${q.status === 'waiting' ? `
+                          <button onclick="callQueueNow('${q.id}')" class="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold">
+                            🔔 เรียกคิว
+                          </button>
+                        ` : q.status === 'called' ? `
+                          <button onclick="callQueueNow('${q.id}')" class="px-2.5 py-1.5 rounded-lg bg-amber-500/20 text-amber-400 border border-amber-500/40 text-xs font-bold">
+                            🔊 เรียกซ้ำ
+                          </button>
+                          <button onclick="completeQueue('${q.id}')" class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold">
+                            ✓ เสร็จสิ้น
+                          </button>
+                        ` : `
+                          <span class="px-2.5 py-1 rounded-lg bg-slate-800 text-slate-400 text-xs">เสร็จสิ้น</span>
+                        `}
+                        <button onclick="deleteQueueItem('${q.id}')" class="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-slate-800">
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+                  `).join('')}
+                </div>
+              `}
+            </div>
+          </div>
+
+          <!-- Right 5 Cols: Realistic 58mm Thermal Paper Slip Preview & Mobile Scan Simulator -->
+          <div class="lg:col-span-5 space-y-6">
+            <div class="bg-slate-900 border border-amber-500/30 rounded-2xl p-6 shadow-xl">
+              <div class="flex justify-between items-center mb-4">
+                <div>
+                  <h2 class="text-base font-bold text-amber-400">🧾 ตัวอย่างสลิปความร้อน 58 mm</h2>
+                  <p class="text-[11px] text-slate-400">ลูกค้าใช้กล้องมือถือหรือ LINE สแกน QR บนกระดาษได้ทันที</p>
+                </div>
+                ${previewQueue ? `
+                  <div class="flex gap-1.5">
+                    <button onclick="print58mmSlip('${previewQueue.id}')" class="text-xs px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold shadow">
+                      🖨️ สั่งพิมพ์สลิปนี้
+                    </button>
+                    <button onclick="switchMode('customer')" class="text-xs px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-400 border border-amber-500/30" title="จำลองหน้าจอมือถือเมื่อสแกน">
+                      📱 ดูหน้ามือถือ
+                    </button>
+                  </div>
+                ` : ''}
+              </div>
+
+              ${previewQueue ? `
+                <!-- 58mm Paper Roll Visual Simulation (Width 220px ~ 58mm scale) -->
+                <div class="mx-auto w-[235px] bg-white text-black rounded-sm shadow-2xl p-4 font-sans border-t-8 border-slate-300 relative">
+                  <div class="text-center">
+                    <div class="text-xs font-extrabold tracking-tight uppercase">${state.shopName}</div>
+                    <div class="text-[11px] text-neutral-700">${previewQueue.service}</div>
+                    <div class="border-t border-dashed border-black my-2"></div>
+                    <div class="text-[10px] text-neutral-600">หมายเลขคิวของคุณ (QUEUE NO.)</div>
+                    <div class="text-5xl font-black tracking-wider my-1 leading-none">${previewQueue.number}</div>
+                    <div class="text-[11px] font-semibold">คุณ ${previewQueue.customerName}</div>
+                    <div class="text-[10px] text-neutral-700 mt-0.5">คิวรอหน้าคุณ: <b>${waitingAheadPreview}</b> คิว</div>
+                    <div class="border-t border-dashed border-black my-2"></div>
+                    <div class="text-[10px] font-bold">สแกน QR เพื่อเช็คสถานะคิว</div>
+                    <div class="text-[9px] text-neutral-600 mb-1.5">และรับเสียงเรียกเตือนบนมือถือ</div>
+                    <div id="qrcode-slip-preview" class="flex justify-center my-1.5"></div>
+                    <div class="text-[10px] font-bold mt-1">เวลาแจ้งเตือน: ${new Date(previewQueue.targetTime).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })} น.</div>
+                    <div class="border-t border-dashed border-black my-2"></div>
+                    <div class="text-[9px] text-neutral-500">ออกบัตร: ${new Date(previewQueue.createdAt).toLocaleString('th-TH', { dateStyle: 'short', timeStyle: 'short' })}</div>
+                    <div class="text-[10px] font-semibold mt-0.5">ขอบคุณที่ใช้บริการครับ</div>
+                  </div>
+                </div>
+
+                <div class="mt-4 p-3.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-300 space-y-1.5">
+                  <div class="flex justify-between items-center">
+                    <span class="text-slate-400">สถานะปัจจุบันของคิว <b>${previewQueue.number}</b>:</span>
+                    <span class="font-bold ${previewQueue.status === 'called' ? 'text-emerald-400' : 'text-amber-400'}">
+                      ${previewQueue.status === 'waiting' ? '⏳ กำลังรอเรียกคิว' : previewQueue.status === 'called' ? '🔔 กำลังเรียกคิว!' : '✅ เสร็จสิ้น'}
+                    </span>
+                  </div>
+                  <div class="flex justify-between items-center pt-1">
+                    <button onclick="copyQueueUrl('${previewQueue.id}')" class="text-amber-400 hover:underline text-[11px]">📋 คัดลอกลิงก์ QR Code</button>
+                    <button onclick="switchMode('customer')" class="text-emerald-400 hover:underline text-[11px]">📲 เปิดหน้าจอมือถือลูกค้าจำลอง →</button>
+                  </div>
+                </div>
+              ` : `
+                <div class="text-center py-16 text-slate-500 text-sm">
+                  กดออกบัตรคิวทางด้านซ้าย เพื่อสร้างสลิป 58 mm และ QR Code
+                </div>
+              `}
+            </div>
+          </div>
+        </main>
+
+        <!-- Printer & Mobile QR URL Settings Modal -->
+        ${state.showSettingsModal ? `
+          <div class="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50">
+            <div class="bg-slate-900 border border-amber-500/40 rounded-2xl max-w-xl w-full p-6 max-h-[90vh] overflow-y-auto space-y-4">
+              <h3 class="text-lg font-bold text-amber-400">⚙️ ตั้งค่าสลิป 58mm & ลิงก์สแกน QR Code ข้ามเครื่อง</h3>
+
+              <div>
+                <label class="block text-xs font-semibold text-white mb-1">1. ชื่อร้าน / บริษัท บนหัวสลิป 58mm</label>
+                <input id="shopNameInput" type="text" value="${state.shopName}" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white" />
+              </div>
+
+              <div>
+                <label class="block text-xs font-semibold text-white mb-1">2. ลิงก์เว็บไซต์สำหรับให้มือถือลูกค้าสแกน QR Code (Public URL / IP)</label>
+                <p class="text-[11px] text-slate-400 mb-1.5">
+                  หากเปิดโปรแกรมจากไฟล์ในเครื่องคอมพิวเตอร์ (<code>file:///</code>) โทรศัพท์มือถือจะสแกนเข้าไฟล์ในคอมไม่ได้ ให้ใส่ลิงก์เว็บที่อัปโหลดไฟล์ <code>index.html</code> ไว้ (เช่น <code>https://loxingroup.com/queue/index.html</code> หรือ IP ในวง Wi-Fi เดียวกัน เช่น <code>http://192.168.1.50:8080/index.html</code>)
+                </p>
+                <input id="publicUrlInput" type="text" placeholder="เช่น https://loxingroup.com/queue/index.html" value="${state.publicBaseUrl}" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-amber-300 font-mono" />
+              </div>
+
+              <div>
+                <label class="block text-xs font-semibold text-white mb-1">3. Firebase Cloud Sync Config (ซิงค์สถานะการกดเรียกคิวแบบ Real-time ข้ามเครื่อง)</label>
+                <textarea id="fbConfigInput" rows="4" placeholder='{"apiKey":"...","authDomain":"...","projectId":"..."}' class="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-xs font-mono text-emerald-400">${state.fbConfigStr}</textarea>
+              </div>
+
+              <div class="p-3.5 bg-slate-950 rounded-xl border border-slate-800 text-xs text-slate-300 space-y-1">
+                <div class="font-bold text-amber-400">🖨️ คำแนะนำการตั้งค่าเครื่องพิมพ์ Thermal 58 mm บน Windows:</div>
+                <p>• ตั้งค่าเครื่องพิมพ์ใบเสร็จ 58mm เป็น <b>Default Printer</b> บน Windows</p>
+                <p>• ในหน้าต่างตั้งค่าการพิมพ์ เลือก Paper Size เป็น <b>58mm Roll Paper</b>, ตั้งค่า Margins เป็น <b>None (ไม่มีขอบ)</b> และเอาติ๊กถูกที่ <b>Headers and footers</b> ออก</p>
+                <p>• หากใช้ไฟล์ <code>Launch_Kiosk_Silent_Print_58mm.bat</code> โปรแกรมจะสั่งพิมพ์ออกเครื่องพิมพ์ 58mm ทันทีโดยไม่ต้องกดปุ่มยืนยัน (Silent Print)</p>
+              </div>
+
+              <div class="flex justify-end gap-2 pt-2">
+                <button onclick="state.showSettingsModal = false; render();" class="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs">ยกเลิก</button>
+                <button onclick="saveSystemSettings()" class="px-5 py-2 rounded-xl bg-amber-500 text-slate-950 font-bold text-xs">บันทึกการตั้งค่า</button>
+              </div>
+            </div>
+          </div>
+        ` : ''}
+      `;
+
+      if (previewQueue) {
+        renderQR('qrcode-slip-preview', previewUrl, 132);
+      }
+    }
+
+    loadLocalQueues();
+    render();
+  </script>
+</body>
+</html>
