@@ -6,10 +6,11 @@
   <meta name="theme-color" content="#0f172a" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <title>Loxin Smart Queue Kiosk & Thermal 58mm System (v4 Sound+Vibrate)</title>
+  <title>Loxin Smart Queue System (v5 Auto-Cloud + Thermal 58mm)</title>
   <link rel="manifest" href="manifest.json" />
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
     body { font-family: 'Prompt', 'Segoe UI', Tahoma, sans-serif; background-color: #020617; color: #f8fafc; margin: 0; }
@@ -23,7 +24,7 @@
       50% { background-color: #ef4444; color: #ffffff; }
     }
     .alarm-active {
-      animation: flash-bg 1s infinite !important;
+      animation: flash-bg 0.9s infinite !important;
     }
     .pulse-btn {
       animation: pulse-ring 1.3s infinite;
@@ -76,7 +77,7 @@
 
   <!-- Dedicated 58mm Thermal Receipt Print Container -->
   <div id="thermal-print-area">
-    <div style="font-size: 13px; font-weight: 800; letter-spacing: 0.5px;" id="p-shop-name">LOXIN SMART QUEUE</div>
+    <div style="font-size: 13px; font-weight: 800; letter-spacing: 0.5px;" id="p-shop-name">LOXIN GROUP CO., LTD.</div>
     <div style="font-size: 10px;" id="p-service-name">ช่องบริการ 1</div>
     <div class="receipt-divider"></div>
     <div style="font-size: 10px; margin-top: 2px;">หมายเลขคิวของคุณ (QUEUE NO.)</div>
@@ -95,49 +96,41 @@
   </div>
 
   <script>
-    if (window.location.protocol.startsWith('http')) {
-      const s = document.createElement('script');
-      s.type = 'module';
-      s.textContent = `
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-        import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-        window.FirebaseSDK = { initializeApp, getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, deleteDoc };
-        if (window.initCloudIfConfigured) window.initCloudIfConfigured();
-      `;
-      document.head.appendChild(s);
-    }
+    const STORAGE_KEY = 'loxin_smart_queue_v5';
+    const PUBLIC_URL_KEY = 'loxin_smart_queue_public_url_v5';
+    const SHOP_NAME_KEY = 'loxin_smart_queue_shop_name_v5';
+    const AUTO_PRINT_KEY = 'loxin_smart_queue_auto_print_v5';
+    const ROOM_ID_KEY = 'loxin_smart_queue_room_id_v5';
 
-    const STORAGE_KEY = 'loxin_smart_queue_v4';
-    const FB_CONFIG_KEY = 'loxin_smart_queue_fb_config';
-    const PUBLIC_URL_KEY = 'loxin_smart_queue_public_url';
-    const SHOP_NAME_KEY = 'loxin_smart_queue_shop_name';
-    const AUTO_PRINT_KEY = 'loxin_smart_queue_auto_print';
+    // Default Render URL pre-configured for noompeepo/loxin-smart-queue
+    const DEFAULT_RENDER_URL = window.location.protocol.startsWith('http')
+      ? window.location.href.split('?')[0]
+      : 'https://loxin-smart-queue.onrender.com';
 
     let channel = null;
-    try { channel = new BroadcastChannel('loxin_queue_sync_v4'); } catch (e) {}
+    try { channel = new BroadcastChannel('loxin_queue_sync_v5'); } catch (e) {}
 
     let state = {
       queues: [],
       mode: 'staff', // 'staff' | 'kiosk' | 'customer'
       customerQueueId: null,
       soundUnlocked: false,
-      acknowledgedIds: {}, // Track dismissed alarms so they don't re-trigger
+      acknowledgedIds: {},
       alarmPlayingId: null,
       ttsEnabled: true,
       autoPrint58mm: localStorage.getItem(AUTO_PRINT_KEY) !== 'false',
       shopName: localStorage.getItem(SHOP_NAME_KEY) || 'LOXIN GROUP CO., LTD.',
-      publicBaseUrl: localStorage.getItem(PUBLIC_URL_KEY) || '',
-      cloudEnabled: false,
-      fbConfigStr: localStorage.getItem(FB_CONFIG_KEY) || '',
+      publicBaseUrl: localStorage.getItem(PUBLIC_URL_KEY) || DEFAULT_RENDER_URL,
+      roomId: localStorage.getItem(ROOM_ID_KEY) || 'loxin-ceo-noom-q1',
+      mqttConnected: false,
       showSettingsModal: false
     };
 
-    let db = null;
+    let mqttClient = null;
     let audioCtx = null;
     let alarmInterval = null;
     let wakeLockObj = null;
 
-    // Request Screen WakeLock on mobile so screen doesn't sleep before queue is called
     async function requestMobileWakeLock() {
       try {
         if ('wakeLock' in navigator) {
@@ -157,16 +150,8 @@
       const qTarget = Number(params.get('t')) || (Date.now() + 300000);
       const qWait = Number(params.get('w')) || 0;
       const qName = params.get('c') || 'ลูกค้า';
-      const qShop = params.get('shop') || state.shopName;
-      state.shopName = qShop;
-
-      // Also check if Firebase config was passed in URL or localStorage
-      if (params.get('fb')) {
-        try {
-          state.fbConfigStr = atob(params.get('fb'));
-          localStorage.setItem(FB_CONFIG_KEY, state.fbConfigStr);
-        } catch (e) {}
-      }
+      if (params.get('shop')) state.shopName = params.get('shop');
+      if (params.get('r')) state.roomId = params.get('r');
 
       setTimeout(() => {
         if (!state.queues.find(x => x.id === qId)) {
@@ -182,7 +167,72 @@
           });
           render();
         }
-      }, 80);
+      }, 50);
+    }
+
+    // =========================================================================
+    // ZERO-CONFIG AUTO CLOUD SYNC (WebSockets MQTT - Works Out of the Box!)
+    // =========================================================================
+    function getMqttTopic() {
+      return `loxin_smart_queue_v5/${state.roomId}/state`;
+    }
+
+    function initAutoCloudSync() {
+      if (typeof mqtt === 'undefined') return;
+      try {
+        if (mqttClient) {
+          try { mqttClient.end(); } catch (e) {}
+        }
+        // Connect to public WebSocket broker over TLS (works on both Windows file:/// and Render https://)
+        mqttClient = mqtt.connect('wss://broker.hivemq.com:8884/mqtt', {
+          clientId: 'loxin_' + Math.random().toString(16).substring(2, 10),
+          clean: true,
+          reconnectPeriod: 3000
+        });
+
+        mqttClient.on('connect', () => {
+          state.mqttConnected = true;
+          const topic = getMqttTopic();
+          mqttClient.subscribe(topic, { qos: 1 });
+          // If staff mode has queues, publish retained state so newly scanned phones get instant status
+          if (state.mode !== 'customer' && state.queues.length > 0) {
+            broadcastCloudState();
+          }
+          render();
+        });
+
+        mqttClient.on('message', (topic, message) => {
+          try {
+            const payload = JSON.parse(message.toString());
+            if (payload && Array.isArray(payload.queues)) {
+              state.queues = payload.queues;
+              if (state.mode !== 'customer') {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(state.queues));
+              }
+              checkAndTriggerCustomerAlarm();
+              render();
+            }
+          } catch (err) {}
+        });
+
+        mqttClient.on('close', () => {
+          state.mqttConnected = false;
+          render();
+        });
+      } catch (e) {}
+    }
+
+    function broadcastCloudState() {
+      try {
+        if (mqttClient && state.mqttConnected) {
+          const payload = JSON.stringify({
+            updatedAt: Date.now(),
+            queues: state.queues
+          });
+          // Publish with retain=true so any phone scanning the QR code immediately receives the latest queue list!
+          mqttClient.publish(getMqttTopic(), payload, { qos: 1, retain: true });
+        }
+      } catch (e) {}
     }
 
     function loadLocalQueues() {
@@ -192,77 +242,49 @@
       } catch (e) {}
     }
 
-    function saveLocalQueues() {
+    function saveAndSyncQueues() {
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(state.queues));
         if (channel) channel.postMessage({ type: 'SYNC', queues: state.queues });
+        broadcastCloudState();
       } catch (e) {}
     }
 
     window.addEventListener('storage', (e) => {
-      if (e.key === STORAGE_KEY && !state.cloudEnabled) {
+      if (e.key === STORAGE_KEY) {
         loadLocalQueues();
+        checkAndTriggerCustomerAlarm();
         render();
       }
     });
 
     if (channel) {
       channel.onmessage = (e) => {
-        if (e.data && e.data.type === 'SYNC' && !state.cloudEnabled) {
+        if (e.data && e.data.type === 'SYNC') {
           state.queues = e.data.queues;
+          checkAndTriggerCustomerAlarm();
           render();
         }
       };
     }
 
-    window.initCloudIfConfigured = function() {
-      if (!state.fbConfigStr || !window.FirebaseSDK) return;
-      try {
-        const cfg = JSON.parse(state.fbConfigStr);
-        const app = window.FirebaseSDK.initializeApp(cfg);
-        db = window.FirebaseSDK.getFirestore(app);
-        state.cloudEnabled = true;
-
-        const qCol = window.FirebaseSDK.collection(db, 'smart_queues');
-        window.FirebaseSDK.onSnapshot(qCol, (snapshot) => {
-          const list = [];
-          snapshot.forEach(docSnap => list.push(docSnap.data()));
-          list.sort((a, b) => a.createdAt - b.createdAt);
-          state.queues = list;
-          render();
-        });
-      } catch (err) {
-        state.cloudEnabled = false;
-      }
-    };
-
     async function persistQueue(item) {
-      if (state.cloudEnabled && db && window.FirebaseSDK) {
-        await window.FirebaseSDK.setDoc(window.FirebaseSDK.doc(db, 'smart_queues', item.id), item);
-      } else {
-        const idx = state.queues.findIndex(q => q.id === item.id);
-        if (idx >= 0) state.queues[idx] = item;
-        else state.queues.push(item);
-        saveLocalQueues();
-        render();
-      }
+      const idx = state.queues.findIndex(q => q.id === item.id);
+      if (idx >= 0) state.queues[idx] = item;
+      else state.queues.push(item);
+      saveAndSyncQueues();
+      render();
     }
 
     async function removeQueue(id) {
-      if (state.cloudEnabled && db && window.FirebaseSDK) {
-        await window.FirebaseSDK.deleteDoc(window.FirebaseSDK.doc(db, 'smart_queues', id));
-      } else {
-        state.queues = state.queues.filter(q => q.id !== id);
-        saveLocalQueues();
-        render();
-      }
+      state.queues = state.queues.filter(q => q.id !== id);
+      saveAndSyncQueues();
+      render();
     }
 
     function getTicketScanUrl(q) {
       let base = state.publicBaseUrl.trim();
-      if (!base) {
-        base = window.location.href.split('?')[0];
-      }
+      if (!base) base = DEFAULT_RENDER_URL;
       const waitingAhead = state.queues.filter(x => x.status === 'waiting' && x.createdAt < q.createdAt).length;
       const paramsObj = {
         q: q.id,
@@ -271,11 +293,9 @@
         t: String(q.targetTime),
         w: String(waitingAhead),
         c: q.customerName,
-        shop: state.shopName
+        shop: state.shopName,
+        r: state.roomId
       };
-      if (state.fbConfigStr) {
-        try { paramsObj.fb = btoa(state.fbConfigStr); } catch (e) {}
-      }
       const query = new URLSearchParams(paramsObj);
       return `${base}?${query.toString()}`;
     }
@@ -317,7 +337,6 @@
     // TRIPLE-LAYER MOBILE SOUND & VIBRATION ENGINE (WAV + WebAudio + TTS + Vibrate)
     // =========================================================================
     function playLoudMobileAlert(queueNumber, serviceName) {
-      // 1. Play embedded Base64 WAV <audio> tag (Works on iOS Safari & Android Chrome)
       try {
         const audioEl = document.getElementById('mobile-chime-audio');
         if (audioEl) {
@@ -327,7 +346,6 @@
         }
       } catch (e) {}
 
-      // 2. Play Web Audio API Synthesizer (Double loudness boost)
       try {
         if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         if (audioCtx.state === 'suspended') audioCtx.resume();
@@ -349,14 +367,12 @@
         });
       } catch (e) {}
 
-      // 3. Trigger Strong Mobile Vibration Pattern (Android Chrome / WebView)
       try {
         if ('vibrate' in navigator) {
           navigator.vibrate([600, 200, 600, 200, 900]);
         }
       } catch (e) {}
 
-      // 4. System Notification (if granted)
       try {
         if ('Notification' in window && Notification.permission === 'granted') {
           new Notification(`🔔 ถึงคิว ${queueNumber} ของคุณแล้ว!`, {
@@ -394,6 +410,13 @@
       render();
     }
 
+    function checkAndTriggerCustomerAlarm() {
+      const activeCustQ = state.queues.find(q => q.id === state.customerQueueId);
+      if (activeCustQ && activeCustQ.status === 'called' && state.soundUnlocked && !state.acknowledgedIds[activeCustQ.id]) {
+        startMobileAlarm(activeCustQ);
+      }
+    }
+
     window.stopMobileAlarm = () => {
       if (state.customerQueueId) {
         state.acknowledgedIds[state.customerQueueId] = true;
@@ -412,7 +435,6 @@
       render();
     };
 
-    // Unlock Mobile Audio + Vibration + WakeLock + Notifications in 1 Tap
     window.unlockMobileAudio = async () => {
       state.soundUnlocked = true;
       playLoudMobileAlert('ทดสอบ', 'ช่องบริการ');
@@ -424,7 +446,6 @@
       } catch (e) {}
       render();
 
-      // If queue is already in 'called' status when user taps unlock, trigger alarm immediately!
       const q = state.queues.find(item => item.id === state.customerQueueId);
       if (q && (q.status === 'called' || Date.now() >= q.targetTime)) {
         q.status = 'called';
@@ -482,7 +503,9 @@
     window.callQueueNow = async (id) => {
       const item = state.queues.find(q => q.id === id);
       if (!item) return;
-      const updated = { ...item, status: 'called', calledAt: Date.now() };
+      // Reset acknowledged state if staff calls again
+      delete state.acknowledgedIds[id];
+      const updated = { ...item, status: 'called', calledAt: Date.now(), callCount: (item.callCount || 0) + 1 };
       await persistQueue(updated);
       playLoudMobileAlert(item.number, item.service);
       setTimeout(() => speakThaiQueue(item.number, item.service), 900);
@@ -515,20 +538,20 @@
     };
 
     window.saveSystemSettings = () => {
-      const shopVal = document.getElementById('shopNameInput').value.trim() || 'LOXIN SMART QUEUE';
-      const pubUrlVal = document.getElementById('publicUrlInput').value.trim();
-      const fbVal = document.getElementById('fbConfigInput').value.trim();
+      const shopVal = document.getElementById('shopNameInput').value.trim() || 'LOXIN GROUP CO., LTD.';
+      const pubUrlVal = document.getElementById('publicUrlInput').value.trim() || DEFAULT_RENDER_URL;
+      const roomVal = document.getElementById('roomIdInput').value.trim() || 'loxin-ceo-noom-q1';
 
       state.shopName = shopVal;
       state.publicBaseUrl = pubUrlVal;
-      state.fbConfigStr = fbVal;
+      state.roomId = roomVal;
 
       localStorage.setItem(SHOP_NAME_KEY, shopVal);
       localStorage.setItem(PUBLIC_URL_KEY, pubUrlVal);
-      localStorage.setItem(FB_CONFIG_KEY, fbVal);
+      localStorage.setItem(ROOM_ID_KEY, roomVal);
 
       state.showSettingsModal = false;
-      window.initCloudIfConfigured();
+      initAutoCloudSync();
       render();
     };
 
@@ -540,29 +563,26 @@
       alert('คัดลอกลิงก์เช็คสถานะคิวเรียบร้อยแล้ว:\n' + url);
     };
 
-    // Real-time countdown & automatic alarm trigger on both Staff & Customer Mobile
     setInterval(() => {
       const now = Date.now();
+      let changed = false;
       state.queues.forEach(q => {
         if (q.status === 'waiting' && now >= q.targetTime) {
           q.status = 'called';
+          changed = true;
           if (state.mode === 'staff') {
             playLoudMobileAlert(q.number, q.service);
             setTimeout(() => speakThaiQueue(q.number, q.service), 900);
           }
-          if (!state.cloudEnabled) {
-            saveLocalQueues();
-            render();
-          } else {
-            persistQueue(q);
-          }
         }
       });
 
-      const activeCustQ = state.queues.find(q => q.id === state.customerQueueId);
-      if (activeCustQ && activeCustQ.status === 'called' && state.soundUnlocked && !state.acknowledgedIds[activeCustQ.id]) {
-        startMobileAlarm(activeCustQ);
+      if (changed) {
+        saveAndSyncQueues();
+        render();
       }
+
+      checkAndTriggerCustomerAlarm();
 
       document.querySelectorAll('[data-countdown]').forEach(el => {
         const target = Number(el.getAttribute('data-countdown'));
@@ -597,7 +617,7 @@
       const app = document.getElementById('app');
 
       // ==========================================================
-      // MODE 1: CUSTOMER MOBILE STATUS CHECK VIEW (With Mandatory Audio+Vibrate Unlock Overlay)
+      // MODE 1: CUSTOMER MOBILE STATUS CHECK VIEW
       // ==========================================================
       if (state.mode === 'customer') {
         const q = state.queues.find(item => item.id === state.customerQueueId) || state.queues[state.queues.length - 1];
@@ -610,7 +630,6 @@
           : 0;
 
         app.innerHTML = `
-          <!-- Full-Screen Audio & Vibration Permission Overlay (Required by iOS/Android Browsers) -->
           ${!state.soundUnlocked ? `
             <div class="fixed inset-0 bg-slate-950/95 backdrop-blur-md z-50 flex flex-col items-center justify-center p-6 text-center">
               <div class="w-20 h-20 rounded-full bg-amber-500/20 border-2 border-amber-400 flex items-center justify-center text-4xl mb-4 pulse-btn">
@@ -618,13 +637,13 @@
               </div>
               <h2 class="text-2xl font-extrabold text-white mb-2">บัตรคิวหมายเลข ${q ? q.number : ''}</h2>
               <p class="text-sm text-slate-300 max-w-xs mb-6 leading-relaxed">
-                กรุณากดปุ่มด้านล่าง 1 ครั้ง เพื่อเปิดระบบ <b>เสียงกระดิ่งแจ้งเตือน + เสียงเรียกคิว + ระบบสั่น</b> เมื่อถึงคิวของคุณ
+                กรุณาแตะปุ่มด้านล่าง 1 ครั้ง เพื่อเปิดระบบ <b>เสียงกระดิ่งแจ้งเตือน + เสียงเรียกคิว + ระบบสั่น</b> เมื่อถึงคิวของคุณ
               </p>
               <button onclick="unlockMobileAudio()" class="w-full max-w-xs py-4 px-6 rounded-2xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-extrabold text-base shadow-2xl pulse-btn">
                 🔊 แตะเพื่อเปิดเสียงแจ้งเตือน & ระบบสั่น
               </button>
               <p class="text-[11px] text-slate-400 mt-4">
-                * แนะนำให้เปิดเสียงมือถือ (ไม่เปิดโหมดปิดเสียง) และเปิดหน้าจอนี้ค้างไว้
+                * แนะนำให้เปิดเสียงมือถือและเปิดหน้าจอนี้ค้างไว้
               </p>
             </div>
           ` : ''}
@@ -632,7 +651,7 @@
           <div class="min-h-screen flex flex-col items-center justify-between p-5 ${isAlarming ? 'alarm-active' : 'bg-slate-950'} transition-all duration-300">
             <div class="w-full max-w-md flex justify-between items-center">
               <div class="flex items-center gap-2">
-                <div class="w-3 h-3 rounded-full bg-amber-400"></div>
+                <div class="w-2.5 h-2.5 rounded-full ${state.mqttConnected ? 'bg-emerald-400' : 'bg-amber-400'}"></div>
                 <span class="font-bold tracking-wider text-xs ${isAlarming ? 'text-slate-950' : 'text-amber-400'}">${state.shopName}</span>
               </div>
               <button onclick="testSoundAndVibrateNow()" class="text-xs px-3 py-1 rounded-full border ${isAlarming ? 'border-slate-900 text-slate-950 font-bold' : 'border-amber-500/40 text-amber-400'}">
@@ -687,7 +706,7 @@
                   </div>
                 ` : `
                   <div class="py-3 px-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-medium flex items-center justify-center gap-2">
-                    <span>🔊</span> เปิดระบบเสียงแจ้งเตือน & ระบบสั่นพร้อมทำงานแล้ว
+                    <span>🔊</span> เชื่อมต่อระบบเรียกคิวอัตโนมัติพร้อมส่งเสียงเตือนแล้ว
                   </div>
                 `}
               </div>
@@ -698,7 +717,7 @@
             `}
 
             <div class="text-xs ${isAlarming ? 'text-slate-950 font-bold' : 'text-slate-500'}">
-              ระบบเช็คสถานะคิวอัจฉริยะผ่าน QR Code (v4 Audio+Vibration)
+              Loxin Smart Queue Cloud Sync (${state.mqttConnected ? 'Online Real-Time' : 'Connecting...'})
             </div>
           </div>
         `;
@@ -759,7 +778,7 @@
       // MODE 3: STAFF POS / QUEUE DISPENSER & 58MM THERMAL SLIP PREVIEW
       // ==========================================================
       const previewQueue = state.queues.find(q => q.id === state.customerQueueId) || state.queues[state.queues.length - 1];
-      const previewUrl = previewQueue ? getTicketScanUrl(previewQueue) : window.location.href.split('?')[0];
+      const previewUrl = previewQueue ? getTicketScanUrl(previewQueue) : state.publicBaseUrl;
       const waitingAheadPreview = previewQueue
         ? state.queues.filter(x => x.status === 'waiting' && x.createdAt < previewQueue.createdAt).length
         : 0;
@@ -771,8 +790,13 @@
               Q
             </div>
             <div>
-              <h1 class="text-lg font-bold text-white tracking-wide">${state.shopName} <span class="text-xs font-normal px-2 py-0.5 rounded bg-amber-500/20 text-amber-400 ml-1">v4 Sound + Vibration</span></h1>
-              <p class="text-xs text-slate-400">ระบบกดออกบัตรคิว + พิมพ์สลิปความร้อน 58 mm พร้อมเสียงกระดิ่งและสั่นแจ้งเตือนบนมือถือ</p>
+              <h1 class="text-lg font-bold text-white tracking-wide flex items-center gap-2">
+                <span>${state.shopName}</span>
+                <span class="text-xs font-semibold px-2.5 py-0.5 rounded-full ${state.mqttConnected ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40' : 'bg-amber-500/20 text-amber-400'}">
+                  ${state.mqttConnected ? '☁️ Cloud Sync เชื่อมต่ออัตโนมัติแล้ว' : '⏳ กำลังเชื่อม Cloud...'}
+                </span>
+              </h1>
+              <p class="text-xs text-slate-400">ระบบกดออกบัตรคิว + พิมพ์สลิป 58 mm พร้อมส่งเสียงเรียกและสั่นเข้ามือถือลูกค้าทันที (ไม่ต้องตั้งค่าฐานข้อมูล)</p>
             </div>
           </div>
 
@@ -787,7 +811,7 @@
               🗣️ เสียงเรียกคิว: ${state.ttsEnabled ? 'เปิด' : 'ปิด'}
             </button>
             <button onclick="state.showSettingsModal = true; render();" class="px-3.5 py-2 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-400 text-slate-950">
-              ⚙️ ตั้งค่าเครื่องพิมพ์ / ลิงก์ Render
+              ⚙️ ตั้งค่าลิงก์ Render (${state.publicBaseUrl.replace('https://', '')})
             </button>
           </div>
         </header>
@@ -799,7 +823,7 @@
                 <h2 class="text-base font-bold text-amber-400 flex items-center gap-2">
                   <span>🖨️</span> กดออกบัตรคิว & พิมพ์สลิป Thermal 58 mm
                 </h2>
-                <span class="text-xs text-slate-400">ขนาดกระดาษมาตรฐาน 58 mm (พื้นที่พิมพ์ 48 mm)</span>
+                <span class="text-xs text-emerald-400 font-medium">✓ ตั้งค่าลิงก์ Render อัตโนมัติพร้อมสแกน</span>
               </div>
 
               <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
@@ -841,7 +865,7 @@
             <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
               <div class="flex justify-between items-center mb-4">
                 <h2 class="text-base font-bold text-white">📋 รายการคิวทั้งหมด (${state.queues.length})</h2>
-                <span class="text-xs text-slate-400">คลิกที่รายการเพื่อดูตัวอย่างสลิป 58mm หรือสั่งพิมพ์ซ้ำ</span>
+                <span class="text-xs text-slate-400">กดปุ่ม "🔔 เรียกคิว" เพื่อสั่งให้มือถือลูกค้าส่งเสียงดังและสั่นทันที</span>
               </div>
 
               ${state.queues.length === 0 ? `
@@ -868,8 +892,8 @@
                           🖨️ พิมพ์ 58mm
                         </button>
                         ${q.status === 'waiting' ? `
-                          <button onclick="callQueueNow('${q.id}')" class="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold">
-                            🔔 เรียกคิว
+                          <button onclick="callQueueNow('${q.id}')" class="px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold shadow">
+                            🔔 เรียกคิวทันที
                           </button>
                         ` : q.status === 'called' ? `
                           <button onclick="callQueueNow('${q.id}')" class="px-2.5 py-1.5 rounded-lg bg-amber-500/20 text-amber-400 border border-amber-500/40 text-xs font-bold">
@@ -942,19 +966,19 @@
 
         ${state.showSettingsModal ? `
           <div class="fixed inset-0 bg-black/80 flex items-center justify-center p-4 z-50">
-            <div class="bg-slate-900 border border-amber-500/40 rounded-2xl max-w-xl w-full p-6 max-h-[90vh] overflow-y-auto space-y-4">
-              <h3 class="text-lg font-bold text-amber-400">⚙️ ตั้งค่าสลิป 58mm & ลิงก์ Render</h3>
+            <div class="bg-slate-900 border border-amber-500/40 rounded-2xl max-w-xl w-full p-6 space-y-4">
+              <h3 class="text-lg font-bold text-amber-400">⚙️ ตั้งค่าชื่อบริษัท & ลิงก์ Render</h3>
               <div>
                 <label class="block text-xs font-semibold text-white mb-1">1. ชื่อร้าน / บริษัท บนหัวสลิป 58mm</label>
                 <input id="shopNameInput" type="text" value="${state.shopName}" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white" />
               </div>
               <div>
-                <label class="block text-xs font-semibold text-white mb-1">2. ลิงก์ Render Static Site ของคุณหนุ่ม (เช่น https://xxxx.onrender.com)</label>
-                <input id="publicUrlInput" type="text" placeholder="https://xxxx.onrender.com" value="${state.publicBaseUrl}" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-amber-300 font-mono" />
+                <label class="block text-xs font-semibold text-white mb-1">2. ลิงก์เว็บไซต์ Render (ตั้งค่าเริ่มต้นให้แล้ว แก้ไขได้หากชื่อต่างจากนี้)</label>
+                <input id="publicUrlInput" type="text" value="${state.publicBaseUrl}" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-amber-300 font-mono" />
               </div>
               <div>
-                <label class="block text-xs font-semibold text-white mb-1">3. Firebase Cloud Sync Config (ไม่บังคับ หากต้องการกดเรียกคิวก่อนเวลาแล้วดังข้ามเครื่อง)</label>
-                <textarea id="fbConfigInput" rows="4" placeholder='{"apiKey":"...","authDomain":"...","projectId":"..."}' class="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-xs font-mono text-emerald-400">${state.fbConfigStr}</textarea>
+                <label class="block text-xs font-semibold text-white mb-1">3. รหัสช่องสัญญาณซิงค์คิว (Room Code - ตั้งไว้ตรงกันอัตโนมัติแล้ว)</label>
+                <input id="roomIdInput" type="text" value="${state.roomId}" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-emerald-400 font-mono" />
               </div>
               <div class="flex justify-end gap-2 pt-2">
                 <button onclick="state.showSettingsModal = false; render();" class="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-xs">ยกเลิก</button>
@@ -971,6 +995,7 @@
     }
 
     loadLocalQueues();
+    initAutoCloudSync();
     render();
   </script>
 </body>
