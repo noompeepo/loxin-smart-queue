@@ -1,12 +1,12 @@
 {
-  "name": "Loxin Smart Queue 58mm Kiosk",
+  "name": "Loxin Smart Queue 58mm Kiosk & TV Media Display",
   "short_name": "SmartQueue",
-  "description": "ระบบออกบัตรคิว พิมพ์สลิป 58mm พร้อมสแกน QR Code แจ้งเตือนเสียงตามภาษาเครื่องมือถือลูกค้า",
+  "description": "ระบบออกบัตรคิว พิมพ์สลิป 58mm พร้อม UI มือถือแปลอัตโนมัติ 5 ภาษาตามเครื่องลูกค้า และจอทีวีแสดงคิวพร้อมช่องเล่น Media",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#0f172a",
   "theme_color": "#0f172a",
-  "orientation": "portrait",
+  "orientation": "landscape",
   "icons": [
     { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
     { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
