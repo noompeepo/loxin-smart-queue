@@ -1,10 +1,10 @@
 {
-  "name": "Loxin Smart Queue 58mm Kiosk & TV Media Display (v22 Complete)",
+  "name": "Loxin Smart Queue System v24 Full (Login + Multi-Printer + Multi-Display)",
   "short_name": "SmartQueue",
-  "description": "ระบบออกบัตรคิว พิมพ์สลิป 58mm พร้อมระบบ Two-Way Intercom สื่อสารสองทางระหว่างเครื่องออกคิวและเครื่องรับคิว ตั้งเวลาเรียกคิวเริ่มต้น 5 นาที ฉบับสมบูรณ์",
+  "description": "ระบบออกบัตรคิวอัจฉริยะพร้อมหน้าเข้าสู่ระบบ Login เชื่อมต่อเครื่องพิมพ์หลายขนาด (58mm/80mm/Sticker/A4) ออกจอภาพหลายจอ Intercom สองทาง และแจ้งเตือนมือถือ 16 ภาษา",
   "start_url": "./index.html",
   "display": "standalone",
-  "background_color": "#0f172a",
+  "background_color": "#020617",
   "theme_color": "#0f172a",
   "orientation": "landscape",
   "icons": [
