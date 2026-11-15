@@ -924,8 +924,13 @@
       render();
       setTimeout(() => {
         const el = document.getElementById('importantMsgInput');
-        if (el) el.value = state.draftMessageText || '';
-      }, 0);
+        if (el) {
+          el.value = state.draftMessageText || '';
+          el.focus();
+          const len = el.value.length;
+          try { el.setSelectionRange(len, len); } catch (e) {}
+        }
+      }, 10);
     };
 
     window.toggleMsgQueueSelection = (queueId) => {
@@ -940,8 +945,13 @@
       render();
       setTimeout(() => {
         const el = document.getElementById('importantMsgInput');
-        if (el) el.value = state.draftMessageText || '';
-      }, 0);
+        if (el) {
+          el.value = state.draftMessageText || '';
+          el.focus();
+          const len = el.value.length;
+          try { el.setSelectionRange(len, len); } catch (e) {}
+        }
+      }, 10);
     };
 
     window.toggleMicQueueSelection = (queueId) => {
@@ -1185,11 +1195,21 @@
       }
     };
 
+    window.focusImportantMsgBox = () => {
+      const el = document.getElementById('importantMsgInput');
+      if (el) {
+        el.focus();
+        const len = el.value.length;
+        try { el.setSelectionRange(len, len); } catch (e) {}
+      }
+    };
+
     window.openBroadcastMsgModal = () => {
       state.draftMessageText = state.importantMessage ? (state.importantMessage.text || '').slice(0, 500) : '';
       state.draftPresetKey = state.importantMessage ? (state.importantMessage.presetKey || '') : '';
       state.showBroadcastMsgModal = true;
       render();
+      setTimeout(() => { window.focusImportantMsgBox(); }, 40);
     };
 
     window.speakImportantNoticeOnPhone = () => {
@@ -1283,6 +1303,18 @@
       render();
     }
 
+
+    function isUserTypingOrModalOpen() {
+      const active = document.activeElement;
+      const isInputFocused = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT');
+      return Boolean(isInputFocused || state.showBroadcastMsgModal || state.showMicModal || state.showSettingsModal || state.showIntercomModal);
+    }
+
+    function safeBackgroundRender() {
+      if (isUserTypingOrModalOpen()) return;
+      render();
+    }
+
     function getMqttTopic() { return `loxin_smart_queue_v22/${state.roomId}/state`; }
     function getHeartbeatTopic() { return `loxin_smart_queue_v22/${state.roomId}/heartbeat`; }
     function getVoiceTopic() { return `loxin_smart_queue_v22/${state.roomId}/voice`; }
@@ -1335,7 +1367,7 @@
         if (state.mode === 'staff') {
           localStorage.setItem(STORAGE_KEY, JSON.stringify(state.queues));
         }
-        render();
+        safeBackgroundRender();
       }
     }
 
@@ -1361,7 +1393,7 @@
             if (heartbeatTimer) clearInterval(heartbeatTimer);
             heartbeatTimer = setInterval(sendCustomerHeartbeat, 4000);
           }
-          render();
+          safeBackgroundRender();
         });
         mqttClient.on('message', (topic, message) => {
           try {
@@ -1416,7 +1448,7 @@
             }
           } catch (err) {}
         });
-        mqttClient.on('close', () => { state.mqttConnected = false; render(); });
+        mqttClient.on('close', () => { state.mqttConnected = false; safeBackgroundRender(); });
       } catch (e) {}
     }
 
@@ -1449,10 +1481,10 @@
         loadLocalQueues();
         if (state.mode === 'display') checkAndSpeakDisplayAnnouncement();
         checkAndTriggerCustomerAlarm();
-        render();
+        safeBackgroundRender();
       } else if (e.key === TV_MEDIA_URL_KEY) {
         state.tvMediaUrl = localStorage.getItem(TV_MEDIA_URL_KEY) || '';
-        render();
+        safeBackgroundRender();
       } else if (e.key === 'loxin_tv_media_ping_v22') {
         loadTvMediaFromIndexedDB();
       }
@@ -1474,7 +1506,7 @@
           }
           if (state.mode === 'display') checkAndSpeakDisplayAnnouncement();
           checkAndTriggerCustomerAlarm();
-          render();
+          safeBackgroundRender();
         }
       };
     }
@@ -2569,18 +2601,18 @@
                 </div>
                 <div>
                   <label class="block text-xs text-slate-400 mb-1">ช่องบริการ</label>
-                  <input id="qService" type="text" value="ช่องบริการ 1" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white" />
+                  <input id="qService" type="text" value="ช่องบริการ 1" onclick="event.stopPropagation(); this.focus();" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white" />
                 </div>
                 <div>
                   <label class="block text-xs text-slate-400 mb-1">ชื่อลูกค้า</label>
-                  <input id="qName" type="text" placeholder="ลูกค้าทั่วไป" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white" />
+                  <input id="qName" type="text" placeholder="ลูกค้าทั่วไป" onclick="event.stopPropagation(); this.focus();" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white" />
                 </div>
               </div>
               <div class="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
                 <div class="sm:col-span-5">
                   <label class="block text-xs text-amber-400 font-semibold mb-1">⏱️ เวลานับถอยหลังเรียกคิว (ค่าเริ่มต้น 5 นาที)</label>
                   <div class="flex items-center gap-1.5">
-                    <input id="qCustomDelayVal" type="number" min="1" value="${state.customDelayVal}" onchange="updateCustomDelayInputs()" class="w-20 bg-slate-950 border border-amber-500/50 rounded-xl px-3 py-2 text-sm font-bold text-amber-300 text-center" />
+                    <input id="qCustomDelayVal" type="number" onclick="event.stopPropagation(); this.focus();" min="1" value="${state.customDelayVal}" onchange="updateCustomDelayInputs()" class="w-20 bg-slate-950 border border-amber-500/50 rounded-xl px-3 py-2 text-sm font-bold text-amber-300 text-center" />
                     <select id="qCustomDelayUnit" onchange="updateCustomDelayInputs()" class="bg-slate-950 border border-slate-700 rounded-xl px-2.5 py-2 text-xs text-white">
                       <option value="min" ${state.customDelayUnit === 'min' ? 'selected' : ''}>นาที</option>
                       <option value="sec" ${state.customDelayUnit === 'sec' ? 'selected' : ''}>วินาที (วิ)</option>
@@ -2590,7 +2622,7 @@
                 </div>
                 <div class="sm:col-span-3">
                   <label class="block text-xs text-slate-400 mb-1">หรือระบุเวลา (HH:MM)</label>
-                  <input id="qTime" type="time" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white" />
+                  <input id="qTime" type="time" onclick="event.stopPropagation(); this.focus();" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white" />
                 </div>
                 <div class="sm:col-span-4">
                   <button onclick="issueQueueTicket(null, null, null)" class="w-full py-2.5 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-sm font-extrabold shadow-lg">
@@ -2928,7 +2960,7 @@
                       </button>
                     </div>
                   </div>
-                  <textarea id="importantMsgInput" rows="3" maxlength="500" autocomplete="off" spellcheck="false" oninput="handleDraftMessageInput(this)" placeholder="พิมพ์ข้อความได้สูงสุด 500 ตัวอักษร (ระบบบนมือถือลูกค้าจะปรับหัวข้อและเสียงอ่านตามภาษาเครื่องของลูกค้าอัตโนมัติ)..." class="w-full bg-slate-950 border border-amber-500/40 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-amber-400">${state.draftMessageText || ''}</textarea>
+                  <textarea id="importantMsgInput" rows="4" maxlength="500" autocomplete="off" spellcheck="false" onclick="event.stopPropagation(); this.focus();" onmousedown="event.stopPropagation();" oninput="handleDraftMessageInput(this)" placeholder="คลิกที่นี่เพื่อพิมพ์ข้อความได้สูงสุด 500 ตัวอักษร (ระบบบนมือถือลูกค้าจะปรับหัวข้อและเสียงอ่านตามภาษาเครื่องของลูกค้าอัตโนมัติ)..." class="w-full bg-slate-950 border-2 border-amber-500/50 focus:border-amber-400 focus:ring-2 focus:ring-amber-400/30 rounded-xl px-3.5 py-2.5 text-sm text-white select-text cursor-text focus:outline-none">${state.draftMessageText || ''}</textarea>
                   <div class="text-[11px] text-emerald-400 mt-1">
                     🌐 เป้าหมายที่เลือก: <b>${formatTargetDisplayLabel(state.msgTarget)}</b> • แสดงผลและอ่านออกเสียงตามภาษาเครื่องลูกค้าอัตโนมัติ
                   </div>
@@ -3076,6 +3108,24 @@
       `;
       if (previewQueue) renderQR('qrcode-slip-preview', previewUrl, 132);
     }
+
+    const _origRender = render;
+    render = function() {
+      const active = document.activeElement;
+      const activeId = active && active.id ? active.id : null;
+      const selStart = (active && typeof active.selectionStart === 'number') ? active.selectionStart : null;
+      const selEnd = (active && typeof active.selectionEnd === 'number') ? active.selectionEnd : null;
+      _origRender();
+      if (activeId) {
+        const nextEl = document.getElementById(activeId);
+        if (nextEl && (nextEl.tagName === 'INPUT' || nextEl.tagName === 'TEXTAREA')) {
+          nextEl.focus();
+          if (selStart !== null && selEnd !== null) {
+            try { nextEl.setSelectionRange(selStart, selEnd); } catch (e) {}
+          }
+        }
+      }
+    };
 
     loadLocalQueues();
     loadTvMediaFromIndexedDB();
