@@ -1,7 +1,7 @@
 {
-  "name": "Loxin Smart Queue 58mm Kiosk & TV Media Display (v18)",
+  "name": "Loxin Smart Queue 58mm Kiosk & TV Media Display (v19)",
   "short_name": "SmartQueue",
-  "description": "ระบบออกบัตรคิว พิมพ์สลิป 58mm พร้อมหน้าควบคุม Mic กระจายเสียงและส่งข้อความสำคัญแบบเลือกส่ง All หรือเลือกเฉพาะหมายเลขคิวได้ทันที",
+  "description": "ระบบออกบัตรคิว พิมพ์สลิป 58mm พร้อมหน้าส่งข้อความสำคัญ (SMS/Notice) รองรับ 500 ตัวอักษร ปุ่ม Clear และแปล/อ่านออกเสียงตามภาษาเครื่องลูกค้าอัตโนมัติ",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#0f172a",
